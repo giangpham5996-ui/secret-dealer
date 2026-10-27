@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Secret Card Dealer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<style>
+/* Layout: one phone-width column. Host: setup → room code → players → spin & deal. Player: join → lobby → card. */
+:root{
+  --bg:#f2f3f6; --surface:#ffffff; --line:#d8dbe3; --fg:#15171c; --muted:#5c6270;
+  --accent:#2f5bd3; --ok:#1f7a4a; --ok-soft:#ddf2e6; --warn-soft:#fbe9e3;
+  --g0:#c8321f; --g1:#2350c4; --g2:#1f7a4a; --g3:#8a3fb8; --g4:#b86a00; --gn:#2b2f38;
+  --display:"Big Shoulders Display","Arial Narrow",Impact,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#111318; --surface:#1a1d24; --line:#2e333d; --fg:#eceef2; --muted:#9aa1ae;
+  --accent:#7c9dff; --ok:#5fd394; --ok-soft:#15301f; --warn-soft:#3a1c18;
+  --g0:#c43c28; --g1:#3a62d0; --g2:#23804f; --g3:#8e4cbc; --g4:#b06a0c; --gn:#3a3f4a; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.5;
+  padding:max(18px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(56px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+[hidden]{display:none!important}
+.wrap{max-width:600px;margin:0 auto;display:flex;flex-direction:column;gap:24px}
+h1{font-family:var(--display);font-weight:900;font-size:44px;line-height:.95;margin:0;text-transform:uppercase;text-wrap:balance}
+h2{font-family:var(--display);font-weight:700;font-size:24px;text-transform:uppercase;letter-spacing:.03em;margin:0}
+.lede,.note{color:var(--muted);margin:0}
+.note{font-size:13px}
+.step{display:flex;flex-direction:column;gap:12px}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+input[type=text],textarea,select{width:100%;font:16px var(--body);color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px}
+textarea{min-height:110px;resize:vertical;font-family:var(--mono);font-size:14px;line-height:1.5}
+select.inline{width:auto;padding:6px 8px;font-size:14px}
+input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{font:600 15px var(--body);border-radius:8px;padding:10px 15px;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--fg);text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn.primary{background:var(--fg);color:var(--bg);border-color:var(--fg);font-family:var(--display);font-size:24px;text-transform:uppercase;letter-spacing:.04em;padding:10px 28px}
+.btn.small{font-size:13px;padding:7px 11px}
+.btn.wa{background:#1f9d55;border-color:#1f9d55;color:#fff}
+.btn.ghost{background:transparent}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.deck{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.deck-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:10px}
+@media (max-width:460px){.deck-grid{grid-template-columns:1fr}}
+.check{display:flex;gap:8px;align-items:center;font-size:14px}
+.warn{font-size:14px;background:var(--warn-soft);border-radius:8px;padding:10px 12px;margin:0}
+.roombox{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:center}
+@media (max-width:460px){.roombox{grid-template-columns:1fr;justify-items:center;text-align:center}}
+.qr{width:170px;height:170px;background:#fff;border-radius:10px;padding:6px}
+.qr svg{width:100%;height:100%;display:block}
+.code{font-family:var(--mono);font-size:34px;letter-spacing:.12em;font-weight:500}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+.dot.on{background:var(--ok)}
+.list{display:flex;flex-direction:column;gap:8px}
+.p{background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--c,var(--gn));border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+.p-name{font-weight:600;font-size:16px;min-width:0;overflow-wrap:anywhere}
+.st{font:600 12px var(--body);padding:3px 9px;border-radius:999px;background:var(--bg);color:var(--muted)}
+.st.on{background:var(--ok-soft);color:var(--ok)}
+details{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px}
+summary{cursor:pointer;font-weight:600}
+table{border-collapse:collapse;width:100%;font-size:14px;margin-top:10px}
+td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.tw{overflow-x:auto}
+.pill{display:inline-flex;align-items:center;font:600 12px var(--body);padding:4px 10px;border-radius:999px;background:var(--surface);border:1px solid var(--line)}
+/* wheel */
+.wheelbox{display:flex;flex-direction:column;align-items:center;gap:8px;position:relative}
+.wheelbox canvas{width:min(300px,100%);aspect-ratio:1}
+.pointer{position:absolute;top:-4px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:13px solid transparent;border-right:13px solid transparent;border-top:22px solid var(--fg)}
+.status{font-family:var(--display);font-size:22px;text-transform:uppercase;letter-spacing:.04em;text-align:center;min-height:1.3em;text-wrap:balance}
+/* card */
+.cardwrap{perspective:1200px;display:flex;justify-content:center;width:100%}
+.card{width:min(310px,100%);aspect-ratio:5/7;position:relative;transform-style:preserve-3d;cursor:pointer;border:0;padding:0;background:none;color:inherit;font:inherit}
+.card .face{position:absolute;inset:0;border-radius:18px;backface-visibility:hidden;-webkit-backface-visibility:hidden;display:flex;flex-direction:column;padding:22px;gap:12px;text-align:left;overflow:auto}
+.card .back{background:repeating-linear-gradient(45deg,var(--fg) 0 10px,color-mix(in srgb,var(--fg) 82%,var(--bg)) 10px 20px);align-items:center;justify-content:center;text-align:center;border:6px solid var(--surface);box-shadow:0 0 0 1px var(--line)}
+.card .back span{background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:8px;font-family:var(--display);font-size:26px;text-transform:uppercase;letter-spacing:.05em}
+.card .front{transform:rotateY(180deg);background:var(--c,var(--gn));color:#fff}
+.card.up{transform:rotateY(180deg)}
+.card:disabled{cursor:default}
+@media (prefers-reduced-motion:no-preference){.card{transition:transform .5s cubic-bezier(.2,.7,.2,1)}}
+.front .k{font:600 11px var(--body);text-transform:uppercase;letter-spacing:.1em;opacity:.85}
+.front .nm{font-family:var(--display);font-weight:900;font-size:34px;line-height:1;text-transform:uppercase;overflow-wrap:anywhere}
+.front .line{background:rgba(0,0,0,.2);border-radius:10px;padding:9px 11px;font-size:16px;line-height:1.35;overflow-wrap:anywhere}
+.front .line b{display:block;font:600 11px var(--body);text-transform:uppercase;letter-spacing:.1em;opacity:.85;margin-bottom:2px}
+.front .hint{margin-top:auto;font-size:12px;opacity:.85}
+.conn{position:fixed;top:max(8px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right))}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:999px;font-weight:600;font-size:14px;max-width:calc(100% - 32px);text-align:center;z-index:5}
+</style>
+</head>
+<body>
+<span class="pill conn" id="connPill" hidden><span class="dot" id="connDot"></span><span id="connTxt"></span></span>
+
+<!-- LANDING -->
+<div class="wrap" id="landing" hidden>
+  <h1>Secret Card Dealer</h1>
+  <p class="lede">Deal secret cards to everyone's phone. One person hosts the room; everyone else joins with a code. No accounts or apps needed.</p>
+  <div class="step">
+    <h2>Join a room</h2>
+    <div class="row"><input type="text" id="joinCode" placeholder="Room code, e.g. K7Q4" autocomplete="off" autocapitalize="characters" style="flex:1;min-width:0;font-family:var(--mono);letter-spacing:.1em"><button class="btn" type="button" id="joinGo">Join</button></div>
+  </div>
+  <div class="step">
+    <h2>Host a game</h2>
+    <p class="note">You'll be the dealer. Keep this page open on your phone while you play.</p>
+    <div class="row"><button class="btn primary" type="button" id="hostGo">Host a room</button></div>
+  </div>
+</div>
+
+<!-- PLAYER -->
+<div class="wrap" id="player" hidden>
+  <header class="step"><p class="note" id="plTitle">Secret Card Dealer</p><h1 id="plHead">Join room</h1></header>
+  <section class="step" id="plJoin">
+    <label class="f">Your name<input type="text" id="plName" maxlength="24" autocomplete="nickname" placeholder="The name everyone knows you by"></label>
+    <div class="row"><button class="btn primary" type="button" id="plJoinBtn">Join</button></div>
+    <p class="warn" id="plErr" hidden></p>
+  </section>
+  <section class="step" id="plLobby" hidden>
+    <div class="wheelbox"><div class="pointer" aria-hidden="true"></div><canvas id="plWheel" width="600" height="600" role="img" aria-label="Wheel with everyone's name"></canvas><div class="status" id="plStatus" aria-live="polite"></div></div>
+    <div class="cardwrap"><button class="card" id="plCard" type="button" disabled aria-label="Your card. Tap to reveal or hide."><div class="face back"><span id="plBack">Waiting</span></div><div class="face front" id="plFront"></div></button></div>
+    <p class="note" id="plNote" style="text-align:center"></p>
+    <div class="step"><h2>In the room</h2><div class="row" id="plList"></div></div>
+    <div class="row"><button class="btn small ghost" type="button" id="plLeave">Change name</button></div>
+  </section>
+</div>
+
+<!-- HOST -->
+<div class="wrap" id="host" hidden>
+  <header class="step"><h1>Secret Card Dealer</h1><p class="lede">You're the dealer. Players join on their phones, you deal, and each phone gets only its own cards.</p></header>
+
+  <section class="roombox" id="roomBox">
+    <div class="qr" id="qr" aria-label="QR code to join"></div>
+    <div class="step" style="gap:8px;min-width:0">
+      <span class="note">Room code</span>
+      <div class="code" id="roomCode">····</div>
+      <div class="row"><a class="btn small wa" id="waShare" target="_blank" rel="noopener">Invite by WhatsApp</a><button class="btn small" type="button" id="copyJoin">Copy join link</button></div>
+      <p class="note">Players scan the code, tap the link, or open this page and type the code.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <h2>Players</h2>
+    <p class="note" id="hostCount">Nobody has joined yet.</p>
+    <div class="list" id="hostList"></div>
+    <div class="row"><button class="btn small" type="button" id="autoTeams">Split into teams at random</button><button class="btn small" type="button" id="swapTeams">Swap the two teams</button></div>
+  </section>
+
+  <section class="step">
+    <div class="wheelbox"><div class="pointer" aria-hidden="true"></div><canvas id="hostWheel" width="600" height="600" role="img" aria-label="Wheel with everyone's name"></canvas><div class="status" id="hostStatus" aria-live="polite"></div></div>
+    <div class="row" style="justify-content:center"><button class="btn primary" type="button" id="dealBtn">Spin &amp; deal</button></div>
+    <p class="warn" id="redealWarn" hidden>Cards are already dealt. Dealing again replaces everyone's cards. <button class="btn small" id="redealYes" type="button">Deal again</button> <button class="btn small" id="redealNo" type="button">Keep current deal</button></p>
+    <p class="warn" id="err" hidden></p>
+    <details id="keyBox" hidden><summary>Dealer's answer key (keep hidden)</summary><div class="tw"><table id="key"></table></div></details>
+  </section>
+
+  <details open id="setupBox">
+    <summary>Game setup: teams and decks</summary>
+    <div class="step" style="margin-top:12px">
+      <div class="row"><span class="note">Start from:</span>
+        <button class="btn small" type="button" data-preset="boom">Two Rooms: Team Battle</button>
+        <button class="btn small" type="button" data-preset="blank">Blank</button></div>
+      <label class="f">Game name<input type="text" id="title"></label>
+      <label class="f">Teams, separated by commas (leave empty for none)<input type="text" id="teams" placeholder="e.g. Red, Blue"></label>
+      <p class="note">Each deck is shuffled and every eligible player gets one card from it. One card per line. Put * before a card to mark it as a key card; another deck can then skip whoever holds one.</p>
+      <div class="list" id="decks"></div>
+      <div class="row"><button class="btn small" type="button" id="addDeck">Add a deck</button></div>
+    </div>
+  </details>
+
+  <div class="row"><button class="btn small ghost" type="button" id="newRoom">Close room and start a new one</button></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+/* ================= helpers ================= */
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function rnd(n){const a=new Uint32Array(1);crypto.getRandomValues(a);return a[0]%n;}
+function shuffle(arr){const a=arr.slice();for(let i=a.length-1;i>0;i--){const j=rnd(i+1);[a[i],a[j]]=[a[j],a[i]];}return a;}
+function lsGet(k){try{return JSON.parse(localStorage.getItem(k)||"null");}catch(e){return null;}}
+function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+function toast(t){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,2200);}
+const uid=()=>Array.from(crypto.getRandomValues(new Uint8Array(9)),b=>b.toString(36).padStart(2,"0")).join("").slice(0,14);
+function teamColour(t,teams){if(!t)return "var(--gn)";const w=t.toLowerCase();
+  if(/red/.test(w))return "var(--g0)";if(/blue/.test(w))return "var(--g1)";if(/green/.test(w))return "var(--g2)";if(/purple/.test(w))return "var(--g3)";if(/orange|yellow/.test(w))return "var(--g4)";
+  const i=Math.max(0,(teams||[]).indexOf(t));return `var(--g${i%5})`;}
+function cssv(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+function resolveColour(v){const m=/var\((--[\w-]+)\)/.exec(v);return m?cssv(m[1]):v;}
+function setConn(state,text){$("connPill").hidden=false;$("connDot").className="dot"+(state==="on"?" on":"");$("connTxt").textContent=text;}
+
+/* ================= networking config ================= */
+const Q=new URLSearchParams(location.search);
+const SRV=Q.get("srv"); // only for local testing: host:port of a private PeerJS server
+function peerOpts(){
+  const base={config:{iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]}};
+  if(!SRV)return base;
+  const [host,port]=SRV.split(":");return {...base,host,port:+port,path:"/",secure:false};
+}
+const PREFIX="secretcarddealer-v1-";
+const hostIdFor=code=>PREFIX+code.toLowerCase();
+function joinUrl(code){const u=new URL(location.href);u.search="";u.hash="";u.searchParams.set("room",code);if(SRV)u.searchParams.set("srv",SRV);return u.toString();}
+function newCode(){const A="ABCDEFGHJKMNPQRSTUVWXYZ23456789";let s="";for(let i=0;i<4;i++)s+=A[rnd(A.length)];return s;}
+
+/* ================= wheel ================= */
+function makeWheel(canvas){
+  let rot=0,anim=null,entries=[];
+  function draw(){
+    const x=canvas.getContext("2d"),W=canvas.width,R=W/2-8,n=Math.max(entries.length,1),a=2*Math.PI/n;
+    x.clearRect(0,0,W,W);
+    const font=cssv("--body")||"sans-serif";
+    if(!entries.length){x.beginPath();x.arc(W/2,W/2,R,0,2*Math.PI);x.fillStyle=cssv("--line");x.fill();}
+    entries.forEach((e,k)=>{
+      const st=rot+k*a-Math.PI/2;
+      x.beginPath();x.moveTo(W/2,W/2);x.arc(W/2,W/2,R,st,st+a);x.closePath();
+      x.fillStyle=resolveColour(e.colour);x.globalAlpha=k%2?0.82:1;x.fill();x.globalAlpha=1;
+      x.strokeStyle=cssv("--surface");x.lineWidth=4;x.stroke();
+      x.save();x.translate(W/2,W/2);x.rotate(st+a/2);x.fillStyle="#fff";
+      x.font=`600 ${n>12?22:28}px ${font}`;x.textAlign="right";x.textBaseline="middle";
+      let t=e.name;while(x.measureText(t).width>R-86&&t.length>2)t=t.slice(0,-2)+"…";
+      x.fillText(t,R-20,0);x.restore();
+    });
+    x.beginPath();x.arc(W/2,W/2,48,0,2*Math.PI);x.fillStyle=cssv("--surface");x.fill();
+    x.fillStyle=cssv("--fg");x.font=`900 30px ${cssv("--display")||"sans-serif"}`;x.textAlign="center";x.textBaseline="middle";x.fillText("DEAL",W/2,W/2+2);
+  }
+  function target(k){const n=Math.max(entries.length,1),a=2*Math.PI/n;let t=-(k+.5)*a;return ((t%(2*Math.PI))+2*Math.PI)%(2*Math.PI);}
+  return {
+    set(list){entries=list;draw();},
+    land(k){rot=target(k);draw();},
+    spin(k,done){
+      const end0=target(k);
+      if(matchMedia("(prefers-reduced-motion: reduce)").matches){rot=end0;draw();done&&done();return;}
+      const start=rot,cur=((rot%(2*Math.PI))+2*Math.PI)%(2*Math.PI);
+      const end=start+6*2*Math.PI+((end0-cur+2*Math.PI)%(2*Math.PI)),t0=performance.now(),D=4200;
+      cancelAnimationFrame(anim);
+      const step=t=>{const p=Math.min(1,(t-t0)/D),e=1-Math.pow(1-p,4);rot=start+(end-start)*e;draw();
+        if(p<1)anim=requestAnimationFrame(step);else{rot=end0;draw();done&&done();}};
+      anim=requestAnimationFrame(step);
+    },
+    redraw:draw
+  };
+}
+function frontHTML(h,title){
+  return `<div class="k">${esc(title||"Your cards")}</div><div class="nm">${esc(h.name)}</div>${h.team?`<div class="k">Team ${esc(h.team)}</div>`:""}
+  ${h.cards.length?h.cards.map(c=>`<div class="line"><b>${esc(c.deck)}</b>${esc(c.text)}</div>`).join(""):`<div class="line">No cards this deal.</div>`}<div class="hint">Tap to hide</div>`;
+}
+
+/* ================= presets ================= */
+const MISSIONS=["Be sent as a hostage at least once","Never be sent as a hostage","End the game in a room with more opponents than teammates","Get an opponent to show you their card, by Show or Interrogation","Get the other team to Interrogate you","End the game in the same room as your own key player","Be the leader who uses your team's Interrogation","Show your card to an opponent at least once"];
+const PRESETS={
+  boom:{title:"Two Rooms and a Boom: Team Battle",teams:"Red, Blue",decks:[
+    {name:"Role",to:"Red",skip:false,cards:"*The Bomber\nRed plain\nRed plain\nRed plain"},
+    {name:"Role",to:"Blue",skip:false,cards:"*The President\nBlue plain\nBlue plain\nBlue plain"},
+    {name:"Start in",to:"Red",skip:false,cards:"Room A\nRoom A\nRoom B\nRoom B"},
+    {name:"Start in",to:"Blue",skip:false,cards:"Room A\nRoom A\nRoom B\nRoom B"},
+    {name:"Secret mission",to:"",skip:true,cards:MISSIONS.join("\n")}]},
+  blank:{title:"",teams:"",decks:[{name:"Card",to:"",skip:false,cards:""}]}
+};
+
+/* =====================================================================
+   HOST
+   ===================================================================== */
+let H=null, hPeer=null, conns=new Map(), hostWheel=null, hostRetry=null, spinningHost=false;
+function saveH(){lsSet("scdHost",H);}
+const teamList=()=>H.teams.split(",").map(s=>s.trim()).filter(Boolean);
+
+function startHost(){
+  H=lsGet("scdHost");
+  if(!H||!H.code){H={code:newCode(),...JSON.parse(JSON.stringify(PRESETS.boom)),players:[],deal:null};saveH();}
+  H.players.forEach(p=>p.online=false);
+  if(location.search.includes("room="))history.replaceState(null,"",location.pathname+(SRV?"?srv="+SRV:""));
+  $("host").hidden=false;
+  hostWheel=makeWheel($("hostWheel"));
+  renderRoomBox();renderSetup();renderHost();
+  openHostPeer();
+  try{navigator.wakeLock&&navigator.wakeLock.request("screen").catch(()=>{});document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")navigator.wakeLock&&navigator.wakeLock.request("screen").catch(()=>{});});}catch(e){}
+}
+function openHostPeer(){
+  clearTimeout(hostRetry);
+  if(typeof Peer==="undefined"){setConn("off","Offline: couldn't load");return;}
+  setConn("off","Opening room…");
+  try{hPeer&&hPeer.destroy();}catch(e){}
+  hPeer=new Peer(hostIdFor(H.code),peerOpts());
+  hPeer.on("open",()=>setConn("on","Room open"));
+  hPeer.on("connection",c=>{
+    c.on("data",d=>onHostData(c,d));
+    c.on("close",()=>dropConn(c));
+    c.on("error",()=>dropConn(c));
+  });
+  hPeer.on("disconnected",()=>{setConn("off","Reconnecting…");setTimeout(()=>{try{hPeer.reconnect();}catch(e){openHostPeer();}},1500);});
+  hPeer.on("error",e=>{
+    if(e.type==="unavailable-id"){setConn("off","Reopening room…");hostRetry=setTimeout(openHostPeer,4000);}
+    else if(["network","server-error","socket-error","socket-closed","disconnected"].includes(e.type)){setConn("off","No connection. Retrying…");hostRetry=setTimeout(openHostPeer,4000);}
+  });
+}
+function dropConn(c){
+  for(const [pid,cc] of conns)if(cc===c){conns.delete(pid);const p=H.players.find(x=>x.pid===pid);if(p)p.online=false;}
+  renderHost();broadcastLobby();
+}
+function send(pid,msg){const c=conns.get(pid);if(c&&c.open){try{c.send(msg);}catch(e){}}}
+function onHostData(c,d){
+  if(!d||typeof d!=="object")return;
+  if(d.type==="hello"){
+    const pid=String(d.pid||"").slice(0,20),name=String(d.name||"").trim().replace(/\s+/g," ").slice(0,24);
+    if(!pid||!name){c.send({type:"error",text:"Type your name to join."});return;}
+    const sameName=H.players.find(p=>p.name.toLowerCase()===name.toLowerCase()&&p.pid!==pid);
+    let me=H.players.find(p=>p.pid===pid);
+    if(sameName&&sameName.online){c.send({type:"error",text:`Someone called ${sameName.name} is already in the room. Add an initial to your name.`});return;}
+    if(sameName&&!sameName.online){ // same person on a new phone or browser: take over their seat
+      if(me)H.players=H.players.filter(p=>p!==me);
+      sameName.pid=pid;me=sameName;
+    }
+    if(!me){me={pid,name,team:""};H.players.push(me);}
+    me.name=sameName?sameName.name:name;me.online=true;
+    const old=conns.get(pid);if(old&&old!==c){try{old.close();}catch(e){}}
+    conns.set(pid,c);saveH();
+    c.send({type:"welcome",pid,name:me.name,title:H.title});
+    renderHost();broadcastLobby();
+    if(H.deal)sendDeal(pid,false);
+    return;
+  }
+  const pid=[...conns].find(([,cc])=>cc===c)?.[0];if(!pid)return;
+  if(d.type==="got"&&H.deal&&d.id===H.deal.id){const p=H.players.find(x=>x.pid===pid);if(p){p.got=H.deal.id;saveH();renderHost();}}
+  if(d.type==="leave"){H.players=H.players.filter(p=>p.pid!==pid);conns.delete(pid);saveH();renderHost();broadcastLobby();try{c.close();}catch(e){}}
+}
+function wheelEntries(list){const ts=teamList();return list.map(p=>({name:p.name,colour:teamColour(p.team,ts)}));}
+function broadcastLobby(){
+  const ts=teamList();
+  const msg={type:"lobby",title:H.title,players:H.players.map(p=>({name:p.name,team:p.team||"",online:!!p.online,colour:teamColour(p.team,ts)}))};
+  for(const pid of conns.keys())send(pid,msg);
+}
+function sendDeal(pid,animate){
+  const d=H.deal;if(!d)return;
+  const hand=d.hands.find(h=>h.pid===pid);
+  send(pid,{type:"spin",id:d.id,land:d.land,wheel:d.wheel,animate,title:d.title,hand:hand?{name:hand.name,team:hand.team,cards:hand.cards,colour:hand.colour}:null});
+}
+
+/* ---- host UI ---- */
+function renderRoomBox(){
+  $("roomCode").textContent=H.code;
+  const url=joinUrl(H.code);
+  try{const q=qrcode(0,"M");q.addData(url);q.make();$("qr").innerHTML=q.createSvgTag({cellSize:4,margin:2,scalable:true});}catch(e){$("qr").innerHTML=`<p class="note" style="padding:8px">QR unavailable</p>`;}
+  $("waShare").href="https://wa.me/?text="+encodeURIComponent(`Join the card room${H.title?" for "+H.title:""}: ${url}\nRoom code: ${H.code}`);
+}
+$("copyJoin").addEventListener("click",()=>{const url=joinUrl(H.code);
+  try{navigator.clipboard.writeText(url).then(()=>toast("Join link copied"),()=>toast(url));}catch(e){toast(url);}});
+function renderHost(){
+  if(!H)return;
+  const ts=teamList(),on=H.players.filter(p=>p.online).length;
+  $("hostCount").textContent=H.players.length?`${H.players.length} player${H.players.length===1?"":"s"}, ${on} connected now.`:"Nobody has joined yet. Share the code above.";
+  $("hostList").innerHTML=H.players.map((p,i)=>{
+    const got=H.deal&&p.got===H.deal.id, inDeal=H.deal&&H.deal.hands.some(h=>h.pid===p.pid);
+    const st=!H.deal?"":got?`<span class="st on">Has cards</span>`:inDeal?`<span class="st">Card waiting</span>`:`<span class="st">Joined after deal</span>`;
+    return `<div class="p" style="--c:${teamColour(p.team,ts)}">
+      <span class="p-name"><span class="dot${p.online?" on":""}" title="${p.online?"Connected":"Not connected"}"></span>${esc(p.name)}</span>
+      <span class="row">${st}${ts.length?`<select class="inline" data-team="${i}" aria-label="Team for ${esc(p.name)}"><option value="">No team</option>${ts.map(t=>`<option${t===p.team?" selected":""}>${esc(t)}</option>`).join("")}</select>`:""}
+      <button class="btn small ghost" type="button" data-kick="${i}" aria-label="Remove ${esc(p.name)}">Remove</button></span></div>`;}).join("");
+  $("autoTeams").hidden=ts.length<2;$("swapTeams").hidden=ts.length!==2;
+  if(!spinningHost){
+    if(H.deal){hostWheel.set(H.deal.wheel);hostWheel.land(H.deal.land);$("hostStatus").textContent="Cards dealt";}
+    else{hostWheel.set(wheelEntries(H.players));$("hostStatus").textContent=H.players.length?"Ready when you are":"Waiting for players";}
+  }
+  renderKey();
+}
+function renderKey(){
+  const d=H.deal;$("keyBox").hidden=!d;if(!d)return;
+  const rows=d.hands.map(h=>`<tr><td>${esc(h.name)}${h.team?` <span class="note">(${esc(h.team)})</span>`:""}</td><td>${h.cards.map(c=>`<b>${esc(c.deck)}:</b> ${esc(c.text)}`).join("<br>")||"—"}</td></tr>`).join("");
+  const un=d.unused.length?`<tr><td><span class="note">Not dealt</span></td><td>${d.unused.map(c=>`${esc(c.deck)}: ${esc(c.text)}`).join("<br>")}</td></tr>`:"";
+  $("key").innerHTML=`<thead><tr><th>Player</th><th>Cards</th></tr></thead><tbody>${rows}${un}</tbody>`;
+}
+$("hostList").addEventListener("change",e=>{const s=e.target.closest("[data-team]");if(!s)return;H.players[+s.dataset.team].team=s.value;saveH();renderHost();broadcastLobby();});
+$("hostList").addEventListener("click",e=>{const b=e.target.closest("[data-kick]");if(!b)return;const p=H.players[+b.dataset.kick];
+  send(p.pid,{type:"kicked"});const c=conns.get(p.pid);setTimeout(()=>{try{c&&c.close();}catch(e){}},300);conns.delete(p.pid);
+  H.players.splice(+b.dataset.kick,1);saveH();renderHost();broadcastLobby();});
+$("autoTeams").addEventListener("click",()=>{const ts=teamList();shuffle(H.players).forEach((p,i)=>p.team=ts[i%ts.length]);saveH();renderHost();broadcastLobby();toast("Teams split at random");});
+$("swapTeams").addEventListener("click",()=>{const [a,b]=teamList();H.players.forEach(p=>{if(p.team===a)p.team=b;else if(p.team===b)p.team=a;});saveH();renderHost();broadcastLobby();toast(`Swapped ${a} and ${b}`);});
+$("newRoom").addEventListener("click",()=>{
+  if(!$("newRoom").dataset.armed){$("newRoom").dataset.armed="1";$("newRoom").textContent="Tap again to close this room";setTimeout(()=>{delete $("newRoom").dataset.armed;$("newRoom").textContent="Close room and start a new one";},4000);return;}
+  for(const pid of conns.keys())send(pid,{type:"closed"});
+  H.code=newCode();H.players=[];H.deal=null;saveH();conns.clear();delete $("newRoom").dataset.armed;$("newRoom").textContent="Close room and start a new one";
+  renderRoomBox();renderHost();openHostPeer();toast("New room "+H.code);
+});
+
+/* ---- setup editor ---- */
+function renderSetup(){$("title").value=H.title;$("teams").value=H.teams;renderDecks();}
+function renderDecks(){
+  const ts=teamList();
+  $("decks").innerHTML=H.decks.map((d,i)=>`<div class="deck">
+    <div class="deck-grid">
+      <label class="f">Deck name<input type="text" id="dn${i}" data-k="name" data-i="${i}" value="${esc(d.name)}" placeholder="e.g. Role"></label>
+      <label class="f">Deal to<select id="dt${i}" data-k="to" data-i="${i}"><option value="">Everyone</option>${[...new Set([...ts,d.to].filter(Boolean))].map(t=>`<option value="${esc(t)}"${t===d.to?" selected":""}>Team ${esc(t)} only</option>`).join("")}</select></label>
+    </div>
+    <label class="f">Cards, one per line<textarea id="dc${i}" data-k="cards" data-i="${i}" spellcheck="false" placeholder="One card per line">${esc(d.cards)}</textarea></label>
+    <div class="row" style="justify-content:space-between">
+      <label class="check"><input type="checkbox" id="ds${i}" data-k="skip" data-i="${i}"${d.skip?" checked":""}> Skip players holding a * key card</label>
+      <button class="btn small ghost" type="button" data-del="${i}">Remove deck</button></div></div>`).join("");
+}
+$("title").addEventListener("input",e=>{H.title=e.target.value;saveH();});
+$("title").addEventListener("change",()=>{renderRoomBox();broadcastLobby();});
+$("teams").addEventListener("input",e=>{H.teams=e.target.value;saveH();});
+$("teams").addEventListener("change",()=>{renderDecks();renderHost();broadcastLobby();});
+const deckEdit=e=>{const t=e.target,i=t.dataset.i,k=t.dataset.k;if(i==null||!k)return;H.decks[+i][k]=t.type==="checkbox"?t.checked:t.value;saveH();};
+$("decks").addEventListener("input",deckEdit);$("decks").addEventListener("change",deckEdit);
+$("decks").addEventListener("click",e=>{const b=e.target.closest("[data-del]");if(!b)return;H.decks.splice(+b.dataset.del,1);saveH();renderDecks();});
+$("addDeck").addEventListener("click",()=>{H.decks.push({name:"",to:"",skip:false,cards:""});saveH();renderDecks();$("dn"+(H.decks.length-1)).focus();});
+document.querySelectorAll("[data-preset]").forEach(b=>b.addEventListener("click",()=>{Object.assign(H,JSON.parse(JSON.stringify(PRESETS[b.dataset.preset])));saveH();renderSetup();renderHost();renderRoomBox();broadcastLobby();}));
+
+/* ---- dealing ---- */
+function showErr(t){$("err").innerHTML=t;$("err").hidden=!t;}
+function deal(){
+  const ps=H.players;
+  if(!ps.length)return showErr("Nobody has joined yet.");
+  const ts=teamList();
+  const decks=H.decks.map(d=>({...d,list:d.cards.split("\n").map(c=>c.trim()).filter(Boolean)})).filter(d=>d.list.length);
+  if(!decks.length)return showErr("Add at least one deck with cards in it (Game setup, below).");
+  const noTeam=ts.length?ps.filter(p=>!p.team):[];
+  const hands=ps.map(p=>({pid:p.pid,name:p.name,team:p.team||"",colour:teamColour(p.team,ts),cards:[],key:false}));
+  const notes=[],unused=[];
+  [...decks.filter(d=>!d.skip),...decks.filter(d=>d.skip)].forEach(d=>{
+    const elig=hands.filter(h=>(!d.to||h.team===d.to)&&!(d.skip&&h.key)),pile=shuffle(d.list),label=d.name||"Card";
+    if(pile.length<elig.length)notes.push(`“${esc(label)}”${d.to?" for "+esc(d.to):""} has ${pile.length} cards for ${elig.length} players, so ${elig.length-pile.length} got none.`);
+    shuffle(elig).forEach((h,i)=>{if(i<pile.length){const raw=pile[i],star=raw.startsWith("*");h.cards.push({deck:label,text:star?raw.slice(1).trim():raw});if(star)h.key=true;}});
+    pile.slice(elig.length).forEach(c=>unused.push({deck:label,text:c.replace(/^\*/,"").trim()}));
+  });
+  const order=[...new Set(decks.map(d=>d.name||"Card"))];
+  hands.forEach(h=>{h.cards.sort((a,b)=>order.indexOf(a.deck)-order.indexOf(b.deck));delete h.key;});
+  if(noTeam.length)notes.unshift(`${noTeam.map(p=>esc(p.name)).join(", ")} ${noTeam.length===1?"has":"have"} no team, so team-only decks skipped them.`);
+  const wheel=wheelEntries(ps),land=rnd(ps.length);
+  H.deal={id:uid(),title:H.title.trim(),hands,unused,wheel,land};
+  H.players.forEach(p=>delete p.got);saveH();
+  showErr(notes.join("<br>"));
+  spinningHost=true;hostWheel.set(wheel);$("hostStatus").textContent="Shuffling…";
+  hostWheel.spin(land,()=>{spinningHost=false;renderHost();});
+  for(const pid of conns.keys())sendDeal(pid,true);
+  renderHost();
+}
+$("dealBtn").addEventListener("click",()=>{if(H.deal){$("redealWarn").hidden=false;return;}deal();});
+$("redealYes").addEventListener("click",()=>{$("redealWarn").hidden=true;deal();});
+$("redealNo").addEventListener("click",()=>{$("redealWarn").hidden=true;});
+
+/* =====================================================================
+   PLAYER
+   ===================================================================== */
+let ME=null, pPeer=null, pConn=null, pRetry=null, plWheel=null, CODE="", joined=false, myHand=null, faceUp=false, spinningPl=false, lastLobby=null;
+function startPlayer(code){
+  CODE=code;
+  ME=lsGet("scdMe")||{pid:uid(),name:""};lsSet("scdMe",ME);
+  $("player").hidden=false;$("plHead").textContent="Room "+code;
+  $("plName").value=ME.name||"";
+  plWheel=makeWheel($("plWheel"));
+  const saved=lsGet("scdHand");if(saved&&saved.room===code){myHand=saved;}
+  if(ME.name&&lsGet("scdJoined")===code)join();
+}
+function join(){
+  const name=$("plName").value.trim().replace(/\s+/g," ");
+  if(!name){showPlErr("Type your name first.");return;}
+  ME.name=name;lsSet("scdMe",ME);showPlErr("");
+  $("plJoinBtn").disabled=true;$("plJoinBtn").textContent="Joining…";
+  connect();
+}
+function showPlErr(t){$("plErr").textContent=t;$("plErr").hidden=!t;}
+function connect(){
+  clearTimeout(pRetry);
+  if(typeof Peer==="undefined"){setConn("off","Couldn't load. Check your internet.");return;}
+  setConn("off","Connecting…");
+  const go=()=>{
+    try{pConn&&pConn.close();}catch(e){}
+    pConn=pPeer.connect(hostIdFor(CODE),{reliable:true});
+    const c=pConn;
+    const timeout=setTimeout(()=>{if(!c.open&&c===pConn)retry();},9000);
+    c.on("open",()=>{clearTimeout(timeout);c.send({type:"hello",pid:ME.pid,name:ME.name});});
+    c.on("data",d=>{if(c===pConn)onPlayerData(d);});
+    c.on("close",()=>{if(c===pConn&&joined)retry();});
+    c.on("error",()=>{if(c===pConn)retry();});
+  };
+  if(pPeer&&!pPeer.destroyed&&pPeer.open){go();return;}
+  try{pPeer&&pPeer.destroy();}catch(e){}
+  pPeer=new Peer(peerOpts());
+  pPeer.on("open",go);
+  pPeer.on("error",e=>{
+    if(e.type==="peer-unavailable"){setConn("off","Dealer not reachable. Retrying…");if(!joined){showPlErr(`Can't find room ${CODE}. Check the code, and that the dealer has the page open.`);resetJoinBtn();}}
+    retry();
+  });
+  pPeer.on("disconnected",()=>{try{pPeer.reconnect();}catch(e){}});
+}
+function retry(){clearTimeout(pRetry);setConn("off","Reconnecting…");pRetry=setTimeout(connect,2500);}
+function resetJoinBtn(){$("plJoinBtn").disabled=false;$("plJoinBtn").textContent="Join";}
+function onPlayerData(d){
+  if(!d||typeof d!=="object")return;
+  if(d.type==="error"){showPlErr(d.text);resetJoinBtn();joined=false;lsSet("scdJoined",null);$("plJoin").hidden=false;$("plLobby").hidden=true;clearTimeout(pRetry);try{pConn.close();}catch(e){}setConn("off","Not joined");return;}
+  if(d.type==="welcome"){joined=true;ME.name=d.name;lsSet("scdMe",ME);lsSet("scdJoined",CODE);setConn("on","Connected");
+    $("plJoin").hidden=true;$("plLobby").hidden=false;$("plTitle").textContent=d.title||"Secret Card Dealer";$("plHead").textContent=d.name;resetJoinBtn();renderPlayer();return;}
+  if(d.type==="lobby"){lastLobby=d;$("plTitle").textContent=d.title||"Secret Card Dealer";
+    $("plList").innerHTML=d.players.map(p=>`<span class="pill" style="border-color:${p.colour}"><span class="dot${p.online?" on":""}"></span>${esc(p.name)}${p.team?` · ${esc(p.team)}`:""}</span>`).join("");
+    if(!spinningPl&&!(myHand&&myHand.id))plWheel.set(d.players.map(p=>({name:p.name,colour:p.colour})));
+    renderPlayer();return;}
+  if(d.type==="spin"){
+    const isNew=!myHand||myHand.id!==d.id;
+    myHand={room:CODE,id:d.id,title:d.title,hand:d.hand,wheel:d.wheel,land:d.land};lsSet("scdHand",myHand);
+    pConn&&pConn.open&&pConn.send({type:"got",id:d.id});
+    plWheel.set(d.wheel);
+    if(isNew){faceUp=false;}
+    if(d.animate&&isNew){spinningPl=true;renderPlayer();plWheel.spin(d.land,()=>{spinningPl=false;renderPlayer();});}
+    else{plWheel.land(d.land);renderPlayer();}
+    return;}
+  if(d.type==="kicked"||d.type==="closed"){joined=false;lsSet("scdJoined",null);lsSet("scdHand",null);myHand=null;clearTimeout(pRetry);try{pConn.close();}catch(e){}
+    setConn("off",d.type==="kicked"?"Removed by dealer":"Room closed");$("plLobby").hidden=true;$("plJoin").hidden=false;
+    showPlErr(d.type==="kicked"?"The dealer removed you from the room.":"The dealer closed this room. Ask for the new code.");resetJoinBtn();}
+}
+function renderPlayer(){
+  const card=$("plCard");
+  if(spinningPl){card.disabled=true;card.classList.remove("up");$("plBack").textContent="Shuffling";$("plStatus").textContent="Shuffling…";$("plNote").textContent="";return;}
+  if(!myHand||!myHand.id){card.disabled=true;card.classList.remove("up");$("plBack").textContent="Waiting";$("plStatus").textContent="Waiting for the dealer";$("plNote").textContent="Keep this page open. Your card appears here when the dealer deals.";return;}
+  $("plStatus").textContent="Cards dealt";
+  if(!myHand.hand){card.disabled=true;$("plBack").textContent="Next deal";$("plNote").textContent="You joined after this deal. You'll get cards next time the dealer deals.";return;}
+  card.disabled=false;$("plBack").textContent="Tap to reveal";
+  $("plFront").style.setProperty("--c",myHand.hand.colour||"var(--gn)");
+  $("plFront").innerHTML=frontHTML(myHand.hand,myHand.title);
+  card.classList.toggle("up",faceUp);
+  $("plNote").textContent=faceUp?"Tap the card to hide it again.":"Make sure nobody can see your screen, then tap the card.";
+}
+$("plCard").addEventListener("click",()=>{if(!myHand||!myHand.hand||spinningPl)return;faceUp=!faceUp;renderPlayer();});
+$("plJoinBtn").addEventListener("click",join);
+$("plName").addEventListener("keydown",e=>{if(e.key==="Enter")join();});
+$("plLeave").addEventListener("click",()=>{try{pConn&&pConn.open&&pConn.send({type:"leave"});}catch(e){}joined=false;lsSet("scdJoined",null);lsSet("scdHand",null);myHand=null;clearTimeout(pRetry);
+  setTimeout(()=>{try{pConn.close();}catch(e){}},300);$("plLobby").hidden=true;$("plJoin").hidden=false;setConn("off","Not joined");$("plName").focus();});
+
+/* ================= boot ================= */
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",()=>{hostWheel&&hostWheel.redraw();plWheel&&plWheel.redraw();});
+(function boot(){
+  const code=(Q.get("room")||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+  if(code){startPlayer(code);return;}
+  if(lsGet("scdHost")&&lsGet("scdIsHost")){startHost();return;}
+  $("landing").hidden=false;
+  const go=()=>{const c=$("joinCode").value.toUpperCase().replace(/[^A-Z0-9]/g,"");if(!c){$("joinCode").focus();return;}location.href=joinUrl(c);};
+  $("joinGo").addEventListener("click",go);$("joinCode").addEventListener("keydown",e=>{if(e.key==="Enter")go();});
+  $("hostGo").addEventListener("click",()=>{lsSet("scdIsHost",true);$("landing").hidden=true;startHost();});
+})();
+</script>
+</body>
+</html>
