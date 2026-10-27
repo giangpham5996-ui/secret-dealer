@@ -203,7 +203,7 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
     </div>
   </details>
 
-  <div class="row"><button class="btn small ghost" type="button" id="newRoom">Close room and start a new one</button></div>
+  <div class="row"><button class="btn small ghost" type="button" id="newRoom">Close room and go back to start</button></div>
 </div>
 <div class="toast" id="toast" hidden></div>
 
@@ -375,7 +375,9 @@ const online=p=>Date.now()-(p.seen||0)<ONLINE_MS;
 function startHost(){
   isHostPage=true;
   H=lsGet("scdHost");
-  if(!H||!H.code||H.v!==2){H={v:2,code:newCode(),...setupOf(PRESETS.boom),players:[],deal:null,errors:{}};saveH();}
+  if(!H||H.v!==2){H={v:2,code:null,...setupOf(PRESETS.boom),players:[],deal:null,errors:{}};}
+  if(!H.code){H.code=newCode();H.players=[];H.deal=null;H.errors={};}
+  saveH();
   H.note=H.note||"";H.decks.forEach(d=>{d.mode=d.mode||"each";});
   const incoming=Q.get("setup");
   if(incoming){try{const s=JSON.parse(new TextDecoder().decode(unb64(incoming.replace(/-/g,"+").replace(/_/g,"/"))));if(Array.isArray(s.decks)){Object.assign(H,setupOf(s));saveH();setTimeout(()=>toast(`Loaded “${H.title||"game"}”`),300);}}catch(e){setTimeout(()=>toast("That setup link is incomplete."),300);}}
@@ -385,7 +387,8 @@ function startHost(){
   hostWheel=makeWheel($("hostWheel"));
   renderRoomBox();renderSetup();renderHost();
   openHostRelay();
-  setInterval(()=>{publishState();renderHost();},10000);
+  if(startHost.once)return;startHost.once=true;
+  setInterval(()=>{if(hRelay){publishState();renderHost();}},10000);
   const wl=()=>{try{navigator.wakeLock&&navigator.wakeLock.request("screen").catch(()=>{});}catch(e){}};wl();
   document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")wl();});
 }
@@ -402,7 +405,7 @@ function openHostRelay(){
   window.__kick=()=>{if(!hRelay.connected)openHostRelay();};
 }
 function publishState(){
-  if(!H||!hRelay)return;
+  if(!H||!hRelay||!H.code)return;
   const ts=teamList();
   const state={t:"state",at:Date.now(),title:H.title,note:H.note||"",closed:false,
     players:H.players.map(p=>{const t=ts.includes(p.team)?p.team:"";return {name:p.name,team:t,online:online(p),colour:teamColour(t,ts)};}),
@@ -488,11 +491,14 @@ $("hostList").addEventListener("click",async e=>{const b=e.target.closest("[data
 $("autoTeams").addEventListener("click",()=>{const ts=teamList();shuffle(H.players).forEach((p,i)=>p.team=ts[i%ts.length]);saveH();renderHost();publishSoon();toast("Teams split at random");});
 $("swapTeams").addEventListener("click",()=>{const [a,b]=teamList();H.players.forEach(p=>{if(p.team===a)p.team=b;else if(p.team===b)p.team=a;});saveH();renderHost();publishSoon();toast(`Swapped ${a} and ${b}`);});
 $("newRoom").addEventListener("click",()=>{
-  const btn=$("newRoom");
-  if(!btn.dataset.armed){btn.dataset.armed="1";btn.textContent="Tap again to close this room";setTimeout(()=>{delete btn.dataset.armed;btn.textContent="Close room and start a new one";},4000);return;}
-  hRelay.publish(NS+H.code+"/down",{t:"state",closed:true,at:Date.now()},{retain:true});
-  H.code=newCode();H.players=[];H.deal=null;H.errors={};saveH();delete btn.dataset.armed;btn.textContent="Close room and start a new one";
-  setTimeout(()=>{renderRoomBox();renderHost();openHostRelay();toast("New room "+H.code);},400);
+  const btn=$("newRoom"),label="Close room and go back to start";
+  if(!btn.dataset.armed){btn.dataset.armed="1";btn.textContent="Tap again to close the room for everyone";setTimeout(()=>{delete btn.dataset.armed;btn.textContent=label;},4000);return;}
+  delete btn.dataset.armed;btn.textContent=label;
+  try{hRelay&&hRelay.publish(NS+H.code+"/down",{t:"state",closed:true,at:Date.now()},{retain:true});}catch(e){}
+  H.code=null;H.players=[];H.deal=null;H.errors={};saveH();lsSet("scdIsHost",false);
+  setTimeout(()=>{try{hRelay&&hRelay.stop();}catch(e){}hRelay=null;},600);
+  showErr("");$("keyBox").hidden=true;$("redealWarn").hidden=true;
+  $("host").hidden=true;$("connPill").hidden=true;window.scrollTo(0,0);showLanding();toast("Room closed");
 });
 
 /* ---- setup editor ---- */
@@ -815,15 +821,20 @@ $("plLeave").addEventListener("click",()=>{pRelay.publish(NS+CODE+"/up",{t:"leav
 
 /* ================= boot ================= */
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",()=>{hostWheel&&hostWheel.redraw();plWheel&&plWheel.redraw();});
+function showLanding(){
+  $("landing").hidden=false;
+  if(showLanding.bound)return;showLanding.bound=true;
+  const go=()=>{const c=$("joinCode").value.toUpperCase().replace(/[^A-Z0-9]/g,"");if(!c){$("joinCode").focus();return;}location.href=joinUrl(c);};
+  $("joinGo").addEventListener("click",go);$("joinCode").addEventListener("keydown",e=>{if(e.key==="Enter")go();});
+  $("hostGo").addEventListener("click",()=>{lsSet("scdIsHost",true);$("landing").hidden=true;window.scrollTo(0,0);startHost();});
+}
 (function boot(){
   const code=(Q.get("room")||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
   if(code){startPlayer(code);return;}
   if(Q.get("setup")){lsSet("scdIsHost",true);startHost();return;}
-  if(lsGet("scdIsHost")&&lsGet("scdHost")){startHost();return;}
-  $("landing").hidden=false;
-  const go=()=>{const c=$("joinCode").value.toUpperCase().replace(/[^A-Z0-9]/g,"");if(!c){$("joinCode").focus();return;}location.href=joinUrl(c);};
-  $("joinGo").addEventListener("click",go);$("joinCode").addEventListener("keydown",e=>{if(e.key==="Enter")go();});
-  $("hostGo").addEventListener("click",()=>{lsSet("scdIsHost",true);$("landing").hidden=true;startHost();});
+  const saved=lsGet("scdHost");
+  if(lsGet("scdIsHost")&&saved&&saved.code){startHost();return;}
+  showLanding();
 })();
 </script>
 </body>
