@@ -192,6 +192,14 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
         <div class="row"><button class="btn small" type="button" id="copySetup">Copy setup link</button><button class="btn small" type="button" id="saveMine">Save to my games</button></div>
         <div class="presets" id="mineBtns"></div>
       </div>
+      <div class="step" style="gap:8px">
+        <h2 style="font-size:20px">Import a game</h2>
+        <p class="note">Paste a game made by Claude, or a setup link. To have Claude make one, copy the instructions, paste them into a Claude chat with your game's rules, then paste Claude's reply here.</p>
+        <div class="row"><button class="btn small" type="button" id="copyPrompt">Copy instructions for Claude</button></div>
+        <label class="f">Game to import<textarea id="importBox" spellcheck="false" placeholder='Paste the game here, e.g. {"title": "...", "decks": [...]}'></textarea></label>
+        <div class="row"><button class="btn small" type="button" id="importBtn">Import game</button></div>
+        <p class="warn" id="importErr" hidden></p>
+      </div>
     </div>
   </details>
 
@@ -577,6 +585,81 @@ $("copySetup").addEventListener("click",()=>{
   const raw=b64(new TextEncoder().encode(JSON.stringify(setupOf(H)))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
   const u=new URL(location.href);u.search="";u.hash="";u.searchParams.set("setup",raw);const url=u.toString();
   try{navigator.clipboard.writeText(url).then(()=>toast("Setup link copied"),()=>prompt("Copy this setup link:",url));}catch(e){prompt("Copy this setup link:",url);}
+});
+
+/* ---- import ---- */
+const CLAUDE_PROMPT=`Turn the game rules I give you into a game file for "Secret Card Dealer", a web app that deals secret cards to players' phones.
+
+Reply with ONLY one JSON object in this shape, with no other text:
+{
+  "title": "Game name",
+  "teams": "Red, Blue",            // comma-separated team names, or "" for no teams
+  "note": "Short how-to-play reminder players can read on their phones (a few lines, \\n for new lines)",
+  "decks": [
+    {
+      "name": "Role",               // label shown on the card, e.g. Role, Mission, Location
+      "to": "",                     // "" = everyone, a team name = that team only, "*each" = deal the deck separately within each team
+      "mode": "each",               // "each" = every player gets a different card from the shuffled deck; "same" = one random card is picked and everyone in scope gets it
+      "skip": false,                // true = skip players who already hold a key card (marked *) from another deck
+      "cards": ["*The Bomber | What this card means", "3x Red plain"]
+    }
+  ]
+}
+
+Card line syntax:
+- "3x Villager" = three copies
+- "+Villager" = fill card: everyone left over in that deck gets it (use this so the game works with any number of players)
+- "Seer | Checks one player each night" = text after | is an explanation shown on the player's phone
+- "@Werewolf" = everyone holding this card sees each other's names
+- "*Spy" = key card; decks with "skip": true pass over whoever holds one
+- Prefixes can combine, e.g. "@2x Werewolf | Choose a victim at night"
+
+Every player gets one card from each deck that applies to them. Decks are dealt in order, but decks with "skip": true are dealt last. Keep explanations short. If the number of players matters, use a + card or explain the required player count in "note".
+
+My game's rules:
+`;
+function stripJsonComments(s){
+  let out="",str=false,esc2=false;
+  for(let i=0;i<s.length;i++){const c=s[i];
+    if(str){out+=c;if(esc2)esc2=false;else if(c==="\\")esc2=true;else if(c==='"')str=false;continue;}
+    if(c==='"'){str=true;out+=c;continue;}
+    if(c==="/"&&s[i+1]==="/"){while(i<s.length&&s[i]!=="\n")i++;out+="\n";continue;}
+    out+=c;}
+  return out.replace(/,(\s*[}\]])/g,"$1");
+}
+function normaliseImport(raw){
+  let s=String(raw||"").trim();if(!s)throw new Error("Paste a game first.");
+  const link=/[?&]setup=([A-Za-z0-9_-]+)/.exec(s);
+  if(link)s=new TextDecoder().decode(unb64(link[1].replace(/-/g,"+").replace(/_/g,"/")));
+  else if(/^[A-Za-z0-9_-]{40,}$/.test(s))s=new TextDecoder().decode(unb64(s.replace(/-/g,"+").replace(/_/g,"/")));
+  const a=s.indexOf("{"),b=s.lastIndexOf("}");
+  if(a<0||b<a)throw new Error("Couldn't find a game in that text. It should start with { and end with }.");
+  s=stripJsonComments(s.slice(a,b+1));
+  let g;try{g=JSON.parse(s);}catch(e){throw new Error("That game text is incomplete or has a typo. Copy Claude's whole reply and try again.");}
+  if(!g||!Array.isArray(g.decks)||!g.decks.length)throw new Error("That game has no decks.");
+  const teams=Array.isArray(g.teams)?g.teams.join(", "):String(g.teams||"");
+  const tl=teams.split(",").map(t=>t.trim()).filter(Boolean);
+  const decks=g.decks.map((d,i)=>{
+    const cards=Array.isArray(d.cards)?d.cards.map(String).join("\n"):String(d.cards||"");
+    let to=String(d.to??d.dealTo??"").trim();
+    if(/^(everyone|all)$/i.test(to))to="";if(/^(each|\*each|each team)$/i.test(to))to="*each";
+    const match=tl.find(t=>t.toLowerCase()===to.toLowerCase());if(to&&to!=="*each")to=match||to;
+    return {name:String(d.name||`Deck ${i+1}`).slice(0,40),to,mode:d.mode==="same"||d.same===true?"same":"each",skip:!!d.skip,cards};
+  });
+  return {title:String(g.title||"Imported game").slice(0,80),teams,note:String(g.note||g.howToPlay||""),decks};
+}
+$("copyPrompt").addEventListener("click",()=>{
+  try{navigator.clipboard.writeText(CLAUDE_PROMPT).then(()=>toast("Instructions copied. Paste them into Claude, then add your rules."),()=>{$("importBox").value=CLAUDE_PROMPT;$("importBox").select();toast("Select and copy the instructions from the box");});}
+  catch(e){$("importBox").value=CLAUDE_PROMPT;$("importBox").select();}
+});
+$("importBtn").addEventListener("click",()=>{
+  $("importErr").hidden=true;
+  try{const g=normaliseImport($("importBox").value);loadSetup(g);$("importBox").value="";
+    const counts=g.decks.map(d=>parseCards(d.cards).length);
+    toast(`Imported “${g.title}”: ${g.decks.length} deck${g.decks.length===1?"":"s"}`);
+    if(counts.some(c=>!c)){$("importErr").textContent="Imported, but some decks have no cards. Check them above.";$("importErr").hidden=false;}
+    $("title").scrollIntoView({behavior:"smooth",block:"center"});}
+  catch(e){$("importErr").textContent=e.message;$("importErr").hidden=false;}
 });
 
 /* ---- dealing ---- */
