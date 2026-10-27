@@ -6,7 +6,7 @@
 <title>Secret Card Dealer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <style>
 /* Layout: one phone-width column. Host: setup → room code → players → spin & deal. Player: join → lobby → card. */
@@ -107,7 +107,7 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
   </div>
   <div class="step">
     <h2>Host a game</h2>
-    <p class="note">You'll be the dealer. Keep this page open on your phone while you play.</p>
+    <p class="note">You'll be the dealer. Keep this page open and on screen while you play. Testing alone? Host on one device and join from another: a phone can't be the dealer and a player at the same time.</p>
     <div class="row"><button class="btn primary" type="button" id="hostGo">Host a room</button></div>
   </div>
 </div>
@@ -185,7 +185,7 @@ function shuffle(arr){const a=arr.slice();for(let i=a.length-1;i>0;i--){const j=
 function lsGet(k){try{return JSON.parse(localStorage.getItem(k)||"null");}catch(e){return null;}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
 function toast(t){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,2200);}
-const uid=()=>Array.from(crypto.getRandomValues(new Uint8Array(9)),b=>b.toString(36).padStart(2,"0")).join("").slice(0,14);
+const uid=()=>Array.from(crypto.getRandomValues(new Uint8Array(12)),b=>b.toString(36).padStart(2,"0")).join("").slice(0,16);
 function teamColour(t,teams){if(!t)return "var(--gn)";const w=t.toLowerCase();
   if(/red/.test(w))return "var(--g0)";if(/blue/.test(w))return "var(--g1)";if(/green/.test(w))return "var(--g2)";if(/purple/.test(w))return "var(--g3)";if(/orange|yellow/.test(w))return "var(--g4)";
   const i=Math.max(0,(teams||[]).indexOf(t));return `var(--g${i%5})`;}
@@ -193,26 +193,71 @@ function cssv(n){return getComputedStyle(document.documentElement).getPropertyVa
 function resolveColour(v){const m=/var\((--[\w-]+)\)/.exec(v);return m?cssv(m[1]):v;}
 function setConn(state,text){$("connPill").hidden=false;$("connDot").className="dot"+(state==="on"?" on":"");$("connTxt").textContent=text;}
 
-/* ================= networking config ================= */
+/* ================= messaging: a public MQTT relay; every card is end-to-end encrypted ================= */
 const Q=new URLSearchParams(location.search);
-const SRV=Q.get("srv"); // only for local testing: host:port of a private PeerJS server
-function peerOpts(){
-  const base={config:{iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]}};
-  if(!SRV)return base;
-  const [host,port]=SRV.split(":");return {...base,host,port:+port,path:"/",secure:false};
+const BROKERS=Q.get("broker")?[Q.get("broker")]:["wss://broker.emqx.io:8084/mqtt","wss://broker.hivemq.com:8884/mqtt","wss://test.mosquitto.org:8081/mqtt"];
+const NS="secretcarddealer/v2/";
+function joinUrl(code,b){const u=new URL(location.href);u.search="";u.hash="";u.searchParams.set("room",code);if(b)u.searchParams.set("b",b);if(Q.get("broker"))u.searchParams.set("broker",Q.get("broker"));return u.toString();}
+function newCode(){const A="ABCDEFGHJKMNPQRSTUVWXYZ23456789";let s="";for(let i=0;i<5;i++)s+=A[rnd(A.length)];return s;}
+/* Connect to the first relay that answers. onUp/onDown report connection state. */
+function relay(startIndex,{onConnect,onMessage,onDown,subscribe}){
+  let idx=startIndex||0,client=null,stopped=false,timer=null;
+  const pinned=Q.get("b")!=null&&!isHostPage;
+  function go(){
+    if(stopped)return;
+    if(typeof mqtt==="undefined"){onDown("Couldn't load. Check your internet and refresh.");return;}
+    const url=BROKERS[idx%BROKERS.length];
+    const old=client;client=null;try{old&&old.end(true);}catch(e){}
+    const c=mqtt.connect(url,{clientId:"scd_"+uid(),keepalive:20,reconnectPeriod:0,connectTimeout:7000,clean:true});
+    client=c;let ok=false,dead=false;
+    c.on("connect",()=>{if(c!==client)return;ok=true;c.subscribe(subscribe,{qos:1},()=>{if(c===client)onConnect(idx%BROKERS.length);});});
+    c.on("message",(t,buf)=>{if(c!==client)return;let d;try{d=JSON.parse(new TextDecoder().decode(buf));}catch(e){return;}onMessage(t,d);});
+    const fail=()=>{if(dead||stopped||c!==client)return;dead=true;try{c.end(true);}catch(e){}
+      if(!ok&&!pinned)idx++;
+      onDown(ok?"Connection lost. Reconnecting…":"Connecting…");
+      clearTimeout(timer);timer=setTimeout(go,ok?800:1500);};
+    c.on("close",fail);c.on("error",()=>{});
+  }
+  go();
+  return {publish(topic,obj,opts){if(client&&client.connected){client.publish(topic,JSON.stringify(obj),{qos:1,...(opts||{})});return true;}return false;},
+    stop(){stopped=true;clearTimeout(timer);try{client&&client.end(true);}catch(e){}},
+    get connected(){return !!(client&&client.connected);}};
 }
-const PREFIX="secretcarddealer-v1-";
-const hostIdFor=code=>PREFIX+code.toLowerCase();
-function joinUrl(code){const u=new URL(location.href);u.search="";u.hash="";u.searchParams.set("room",code);if(SRV)u.searchParams.set("srv",SRV);return u.toString();}
-function newCode(){const A="ABCDEFGHJKMNPQRSTUVWXYZ23456789";let s="";for(let i=0;i<4;i++)s+=A[rnd(A.length)];return s;}
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&window.__kick)window.__kick();});
+
+/* ================= crypto: each player's phone holds a private key; cards are sealed to it ================= */
+const b64=u=>btoa(String.fromCharCode(...new Uint8Array(u)));
+const unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const EC={name:"ECDH",namedCurve:"P-256"};
+async function myKeys(){
+  let k=lsGet("scdKey");
+  if(!k){const kp=await crypto.subtle.generateKey(EC,true,["deriveKey"]);
+    k={pub:await crypto.subtle.exportKey("jwk",kp.publicKey),priv:await crypto.subtle.exportKey("jwk",kp.privateKey)};lsSet("scdKey",k);}
+  return k;
+}
+async function seal(pk,obj){
+  const eph=await crypto.subtle.generateKey(EC,true,["deriveKey"]);
+  const theirs=await crypto.subtle.importKey("jwk",{kty:"EC",crv:"P-256",x:pk.x,y:pk.y,ext:true},EC,false,[]);
+  const key=await crypto.subtle.deriveKey({name:"ECDH",public:theirs},eph.privateKey,{name:"AES-GCM",length:256},false,["encrypt"]);
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,new TextEncoder().encode(JSON.stringify(obj)));
+  const e=await crypto.subtle.exportKey("jwk",eph.publicKey);
+  return {ex:e.x,ey:e.y,iv:b64(iv),ct:b64(ct)};
+}
+async function unseal(priv,box){
+  const mine=await crypto.subtle.importKey("jwk",priv,EC,false,["deriveKey"]);
+  const eph=await crypto.subtle.importKey("jwk",{kty:"EC",crv:"P-256",x:box.ex,y:box.ey,ext:true},EC,false,[]);
+  const key=await crypto.subtle.deriveKey({name:"ECDH",public:eph},mine,{name:"AES-GCM",length:256},false,["decrypt"]);
+  return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:"AES-GCM",iv:unb64(box.iv)},key,unb64(box.ct))));
+}
+const kidOf=pk=>String(pk&&pk.x||"").slice(0,16);
 
 /* ================= wheel ================= */
 function makeWheel(canvas){
   let rot=0,anim=null,entries=[];
   function draw(){
     const x=canvas.getContext("2d"),W=canvas.width,R=W/2-8,n=Math.max(entries.length,1),a=2*Math.PI/n;
-    x.clearRect(0,0,W,W);
-    const font=cssv("--body")||"sans-serif";
+    x.clearRect(0,0,W,W);const font=cssv("--body")||"sans-serif";
     if(!entries.length){x.beginPath();x.arc(W/2,W/2,R,0,2*Math.PI);x.fillStyle=cssv("--line");x.fill();}
     entries.forEach((e,k)=>{
       const st=rot+k*a-Math.PI/2;
@@ -262,107 +307,109 @@ const PRESETS={
 };
 
 /* =====================================================================
-   HOST
+   HOST: keeps the room's state and publishes it (retained) to …/down.
+   Players write to …/up. Cards travel sealed to each player's key.
    ===================================================================== */
-let H=null, hPeer=null, conns=new Map(), hostWheel=null, hostRetry=null, spinningHost=false;
+let isHostPage=false;
+let H=null,hRelay=null,hostWheel=null,spinningHost=false,hBroker=0,pubTimer=null;
+const ONLINE_MS=25000;
 function saveH(){lsSet("scdHost",H);}
 const teamList=()=>H.teams.split(",").map(s=>s.trim()).filter(Boolean);
+const online=p=>Date.now()-(p.seen||0)<ONLINE_MS;
 
 function startHost(){
+  isHostPage=true;
   H=lsGet("scdHost");
-  if(!H||!H.code){H={code:newCode(),...JSON.parse(JSON.stringify(PRESETS.boom)),players:[],deal:null};saveH();}
-  H.players.forEach(p=>p.online=false);
-  if(location.search.includes("room="))history.replaceState(null,"",location.pathname+(SRV?"?srv="+SRV:""));
+  if(!H||!H.code||H.v!==2){H={v:2,code:newCode(),...JSON.parse(JSON.stringify(PRESETS.boom)),players:[],deal:null,errors:{}};saveH();}
+  if(location.search.includes("room="))history.replaceState(null,"",location.pathname);
   $("host").hidden=false;
   hostWheel=makeWheel($("hostWheel"));
   renderRoomBox();renderSetup();renderHost();
-  openHostPeer();
-  try{navigator.wakeLock&&navigator.wakeLock.request("screen").catch(()=>{});document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")navigator.wakeLock&&navigator.wakeLock.request("screen").catch(()=>{});});}catch(e){}
+  openHostRelay();
+  setInterval(()=>{publishState();renderHost();},10000);
+  const wl=()=>{try{navigator.wakeLock&&navigator.wakeLock.request("screen").catch(()=>{});}catch(e){}};wl();
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")wl();});
 }
-function openHostPeer(){
-  clearTimeout(hostRetry);
-  if(typeof Peer==="undefined"){setConn("off","Offline: couldn't load");return;}
+function openHostRelay(){
+  try{hRelay&&hRelay.stop();}catch(e){}
+  const base=NS+H.code;
   setConn("off","Opening room…");
-  try{hPeer&&hPeer.destroy();}catch(e){}
-  hPeer=new Peer(hostIdFor(H.code),peerOpts());
-  hPeer.on("open",()=>setConn("on","Room open"));
-  hPeer.on("connection",c=>{
-    c.on("data",d=>onHostData(c,d));
-    c.on("close",()=>dropConn(c));
-    c.on("error",()=>dropConn(c));
+  hRelay=relay(+(lsGet("scdHostBroker")||0),{
+    subscribe:base+"/up",
+    onConnect:i=>{hBroker=i;lsSet("scdHostBroker",i);setConn("on","Room open");renderRoomBox();publishState();},
+    onDown:t=>setConn("off",t),
+    onMessage:(t,d)=>onHostData(d)
   });
-  hPeer.on("disconnected",()=>{setConn("off","Reconnecting…");setTimeout(()=>{try{hPeer.reconnect();}catch(e){openHostPeer();}},1500);});
-  hPeer.on("error",e=>{
-    if(e.type==="unavailable-id"){setConn("off","Reopening room…");hostRetry=setTimeout(openHostPeer,4000);}
-    else if(["network","server-error","socket-error","socket-closed","disconnected"].includes(e.type)){setConn("off","No connection. Retrying…");hostRetry=setTimeout(openHostPeer,4000);}
-  });
+  window.__kick=()=>{if(!hRelay.connected)openHostRelay();};
 }
-function dropConn(c){
-  for(const [pid,cc] of conns)if(cc===c){conns.delete(pid);const p=H.players.find(x=>x.pid===pid);if(p)p.online=false;}
-  renderHost();broadcastLobby();
-}
-function send(pid,msg){const c=conns.get(pid);if(c&&c.open){try{c.send(msg);}catch(e){}}}
-function onHostData(c,d){
-  if(!d||typeof d!=="object")return;
-  if(d.type==="hello"){
-    const pid=String(d.pid||"").slice(0,20),name=String(d.name||"").trim().replace(/\s+/g," ").slice(0,24);
-    if(!pid||!name){c.send({type:"error",text:"Type your name to join."});return;}
-    const sameName=H.players.find(p=>p.name.toLowerCase()===name.toLowerCase()&&p.pid!==pid);
-    let me=H.players.find(p=>p.pid===pid);
-    if(sameName&&sameName.online){c.send({type:"error",text:`Someone called ${sameName.name} is already in the room. Add an initial to your name.`});return;}
-    if(sameName&&!sameName.online){ // same person on a new phone or browser: take over their seat
-      if(me)H.players=H.players.filter(p=>p!==me);
-      sameName.pid=pid;me=sameName;
-    }
-    if(!me){me={pid,name,team:""};H.players.push(me);}
-    me.name=sameName?sameName.name:name;me.online=true;
-    const old=conns.get(pid);if(old&&old!==c){try{old.close();}catch(e){}}
-    conns.set(pid,c);saveH();
-    c.send({type:"welcome",pid,name:me.name,title:H.title});
-    renderHost();broadcastLobby();
-    if(H.deal)sendDeal(pid,false);
-    return;
-  }
-  const pid=[...conns].find(([,cc])=>cc===c)?.[0];if(!pid)return;
-  if(d.type==="got"&&H.deal&&d.id===H.deal.id){const p=H.players.find(x=>x.pid===pid);if(p){p.got=H.deal.id;saveH();renderHost();}}
-  if(d.type==="leave"){H.players=H.players.filter(p=>p.pid!==pid);conns.delete(pid);saveH();renderHost();broadcastLobby();try{c.close();}catch(e){}}
-}
-function wheelEntries(list){const ts=teamList();return list.map(p=>({name:p.name,colour:teamColour(p.team,ts)}));}
-function broadcastLobby(){
+function publishState(){
+  if(!H||!hRelay)return;
   const ts=teamList();
-  const msg={type:"lobby",title:H.title,players:H.players.map(p=>({name:p.name,team:p.team||"",online:!!p.online,colour:teamColour(p.team,ts)}))};
-  for(const pid of conns.keys())send(pid,msg);
+  const state={t:"state",at:Date.now(),title:H.title,closed:false,
+    players:H.players.map(p=>({name:p.name,team:p.team||"",online:online(p),colour:teamColour(p.team,ts)})),
+    errors:H.errors||{},
+    deal:H.deal?{id:H.deal.id,title:H.deal.title,land:H.deal.land,wheel:H.deal.wheel,at:H.deal.at,sealed:H.deal.sealed||{},late:H.deal.late||[]}:null};
+  hRelay.publish(NS+H.code+"/down",state,{retain:true});
 }
-function sendDeal(pid,animate){
-  const d=H.deal;if(!d)return;
-  const hand=d.hands.find(h=>h.pid===pid);
-  send(pid,{type:"spin",id:d.id,land:d.land,wheel:d.wheel,animate,title:d.title,hand:hand?{name:hand.name,team:hand.team,cards:hand.cards,colour:hand.colour}:null});
+const publishSoon=()=>{clearTimeout(pubTimer);pubTimer=setTimeout(publishState,150);};
+async function onHostData(d){
+  if(!d||typeof d!=="object"||typeof d.pid!=="string")return;
+  const pid=d.pid.slice(0,24);
+  if(d.t==="hello"){
+    const name=String(d.name||"").trim().replace(/\s+/g," ").slice(0,24);
+    if(!name||!d.pk||typeof d.pk.x!=="string"||typeof d.pk.y!=="string")return;
+    const kid=kidOf(d.pk);
+    let me=H.players.find(p=>p.pid===pid);
+    const same=H.players.find(p=>p.name.toLowerCase()===name.toLowerCase()&&p.pid!==pid);
+    if(same&&online(same)){H.errors[kid]=`Someone called ${same.name} is already in the room. Add an initial to your name.`;publishSoon();return;}
+    delete H.errors[kid];
+    if(same){if(me)H.players=H.players.filter(p=>p!==me);same.pid=pid;me=same;}   // same person on a new phone: take over their seat
+    if(!me){me={pid,name,team:""};H.players.push(me);}
+    else if(!same)me.name=name;
+    const keyChanged=!me.pk||me.pk.x!==d.pk.x;
+    me.pk={x:d.pk.x,y:d.pk.y};me.seen=Date.now();saveH();
+    if(H.deal&&keyChanged)await sealFor(me);
+    renderHost();publishSoon();return;
+  }
+  const me=H.players.find(p=>p.pid===pid);if(!me)return;
+  if(d.t==="ping"){const was=online(me);me.seen=Date.now();if(!was){renderHost();publishSoon();}return;}
+  if(d.t==="got"&&H.deal&&d.id===H.deal.id){me.got=d.id;me.seen=Date.now();saveH();renderHost();return;}
+  if(d.t==="leave"){H.players=H.players.filter(p=>p!==me);saveH();renderHost();publishSoon();}
+}
+async function sealFor(p){
+  const d=H.deal;if(!d||!p.pk)return;
+  d.sealed=d.sealed||{};d.kids=d.kids||{};
+  if(d.kids[p.pid]){delete d.sealed[d.kids[p.pid]];delete d.kids[p.pid];}
+  const hand=d.hands.find(h=>h.pid===p.pid);if(!hand)return;
+  const kid=kidOf(p.pk);
+  d.sealed[kid]=await seal(p.pk,{name:hand.name,team:hand.team,cards:hand.cards,colour:hand.colour,id:d.id});
+  d.kids[p.pid]=kid;saveH();
 }
 
 /* ---- host UI ---- */
 function renderRoomBox(){
   $("roomCode").textContent=H.code;
-  const url=joinUrl(H.code);
+  const url=joinUrl(H.code,hBroker);
   try{const q=qrcode(0,"M");q.addData(url);q.make();$("qr").innerHTML=q.createSvgTag({cellSize:4,margin:2,scalable:true});}catch(e){$("qr").innerHTML=`<p class="note" style="padding:8px">QR unavailable</p>`;}
   $("waShare").href="https://wa.me/?text="+encodeURIComponent(`Join the card room${H.title?" for "+H.title:""}: ${url}\nRoom code: ${H.code}`);
 }
-$("copyJoin").addEventListener("click",()=>{const url=joinUrl(H.code);
+$("copyJoin").addEventListener("click",()=>{const url=joinUrl(H.code,hBroker);
   try{navigator.clipboard.writeText(url).then(()=>toast("Join link copied"),()=>toast(url));}catch(e){toast(url);}});
 function renderHost(){
   if(!H)return;
-  const ts=teamList(),on=H.players.filter(p=>p.online).length;
+  const ts=teamList(),on=H.players.filter(online).length;
   $("hostCount").textContent=H.players.length?`${H.players.length} player${H.players.length===1?"":"s"}, ${on} connected now.`:"Nobody has joined yet. Share the code above.";
   $("hostList").innerHTML=H.players.map((p,i)=>{
     const got=H.deal&&p.got===H.deal.id, inDeal=H.deal&&H.deal.hands.some(h=>h.pid===p.pid);
     const st=!H.deal?"":got?`<span class="st on">Has cards</span>`:inDeal?`<span class="st">Card waiting</span>`:`<span class="st">Joined after deal</span>`;
     return `<div class="p" style="--c:${teamColour(p.team,ts)}">
-      <span class="p-name"><span class="dot${p.online?" on":""}" title="${p.online?"Connected":"Not connected"}"></span>${esc(p.name)}</span>
+      <span class="p-name"><span class="dot${online(p)?" on":""}" title="${online(p)?"Connected":"Not connected"}"></span>${esc(p.name)}</span>
       <span class="row">${st}${ts.length?`<select class="inline" data-team="${i}" aria-label="Team for ${esc(p.name)}"><option value="">No team</option>${ts.map(t=>`<option${t===p.team?" selected":""}>${esc(t)}</option>`).join("")}</select>`:""}
       <button class="btn small ghost" type="button" data-kick="${i}" aria-label="Remove ${esc(p.name)}">Remove</button></span></div>`;}).join("");
   $("autoTeams").hidden=ts.length<2;$("swapTeams").hidden=ts.length!==2;
   if(!spinningHost){
     if(H.deal){hostWheel.set(H.deal.wheel);hostWheel.land(H.deal.land);$("hostStatus").textContent="Cards dealt";}
-    else{hostWheel.set(wheelEntries(H.players));$("hostStatus").textContent=H.players.length?"Ready when you are":"Waiting for players";}
+    else{hostWheel.set(H.players.map(p=>({name:p.name,colour:teamColour(p.team,ts)})));$("hostStatus").textContent=H.players.length?"Ready when you are":"Waiting for players";}
   }
   renderKey();
 }
@@ -372,17 +419,20 @@ function renderKey(){
   const un=d.unused.length?`<tr><td><span class="note">Not dealt</span></td><td>${d.unused.map(c=>`${esc(c.deck)}: ${esc(c.text)}`).join("<br>")}</td></tr>`:"";
   $("key").innerHTML=`<thead><tr><th>Player</th><th>Cards</th></tr></thead><tbody>${rows}${un}</tbody>`;
 }
-$("hostList").addEventListener("change",e=>{const s=e.target.closest("[data-team]");if(!s)return;H.players[+s.dataset.team].team=s.value;saveH();renderHost();broadcastLobby();});
-$("hostList").addEventListener("click",e=>{const b=e.target.closest("[data-kick]");if(!b)return;const p=H.players[+b.dataset.kick];
-  send(p.pid,{type:"kicked"});const c=conns.get(p.pid);setTimeout(()=>{try{c&&c.close();}catch(e){}},300);conns.delete(p.pid);
-  H.players.splice(+b.dataset.kick,1);saveH();renderHost();broadcastLobby();});
-$("autoTeams").addEventListener("click",()=>{const ts=teamList();shuffle(H.players).forEach((p,i)=>p.team=ts[i%ts.length]);saveH();renderHost();broadcastLobby();toast("Teams split at random");});
-$("swapTeams").addEventListener("click",()=>{const [a,b]=teamList();H.players.forEach(p=>{if(p.team===a)p.team=b;else if(p.team===b)p.team=a;});saveH();renderHost();broadcastLobby();toast(`Swapped ${a} and ${b}`);});
+$("hostList").addEventListener("change",e=>{const s=e.target.closest("[data-team]");if(!s)return;H.players[+s.dataset.team].team=s.value;saveH();renderHost();publishSoon();});
+$("hostList").addEventListener("click",async e=>{const b=e.target.closest("[data-kick]");if(!b)return;const p=H.players[+b.dataset.kick];
+  H.players.splice(+b.dataset.kick,1);
+  if(H.deal&&H.deal.kids&&H.deal.kids[p.pid]){delete H.deal.sealed[H.deal.kids[p.pid]];delete H.deal.kids[p.pid];}
+  if(p.pk)H.errors[kidOf(p.pk)]="The dealer removed you from the room.";
+  saveH();renderHost();publishSoon();});
+$("autoTeams").addEventListener("click",()=>{const ts=teamList();shuffle(H.players).forEach((p,i)=>p.team=ts[i%ts.length]);saveH();renderHost();publishSoon();toast("Teams split at random");});
+$("swapTeams").addEventListener("click",()=>{const [a,b]=teamList();H.players.forEach(p=>{if(p.team===a)p.team=b;else if(p.team===b)p.team=a;});saveH();renderHost();publishSoon();toast(`Swapped ${a} and ${b}`);});
 $("newRoom").addEventListener("click",()=>{
-  if(!$("newRoom").dataset.armed){$("newRoom").dataset.armed="1";$("newRoom").textContent="Tap again to close this room";setTimeout(()=>{delete $("newRoom").dataset.armed;$("newRoom").textContent="Close room and start a new one";},4000);return;}
-  for(const pid of conns.keys())send(pid,{type:"closed"});
-  H.code=newCode();H.players=[];H.deal=null;saveH();conns.clear();delete $("newRoom").dataset.armed;$("newRoom").textContent="Close room and start a new one";
-  renderRoomBox();renderHost();openHostPeer();toast("New room "+H.code);
+  const btn=$("newRoom");
+  if(!btn.dataset.armed){btn.dataset.armed="1";btn.textContent="Tap again to close this room";setTimeout(()=>{delete btn.dataset.armed;btn.textContent="Close room and start a new one";},4000);return;}
+  hRelay.publish(NS+H.code+"/down",{t:"state",closed:true,at:Date.now()},{retain:true});
+  H.code=newCode();H.players=[];H.deal=null;H.errors={};saveH();delete btn.dataset.armed;btn.textContent="Close room and start a new one";
+  setTimeout(()=>{renderRoomBox();renderHost();openHostRelay();toast("New room "+H.code);},400);
 });
 
 /* ---- setup editor ---- */
@@ -400,18 +450,18 @@ function renderDecks(){
       <button class="btn small ghost" type="button" data-del="${i}">Remove deck</button></div></div>`).join("");
 }
 $("title").addEventListener("input",e=>{H.title=e.target.value;saveH();});
-$("title").addEventListener("change",()=>{renderRoomBox();broadcastLobby();});
+$("title").addEventListener("change",()=>{renderRoomBox();publishSoon();});
 $("teams").addEventListener("input",e=>{H.teams=e.target.value;saveH();});
-$("teams").addEventListener("change",()=>{renderDecks();renderHost();broadcastLobby();});
+$("teams").addEventListener("change",()=>{renderDecks();renderHost();publishSoon();});
 const deckEdit=e=>{const t=e.target,i=t.dataset.i,k=t.dataset.k;if(i==null||!k)return;H.decks[+i][k]=t.type==="checkbox"?t.checked:t.value;saveH();};
 $("decks").addEventListener("input",deckEdit);$("decks").addEventListener("change",deckEdit);
 $("decks").addEventListener("click",e=>{const b=e.target.closest("[data-del]");if(!b)return;H.decks.splice(+b.dataset.del,1);saveH();renderDecks();});
 $("addDeck").addEventListener("click",()=>{H.decks.push({name:"",to:"",skip:false,cards:""});saveH();renderDecks();$("dn"+(H.decks.length-1)).focus();});
-document.querySelectorAll("[data-preset]").forEach(b=>b.addEventListener("click",()=>{Object.assign(H,JSON.parse(JSON.stringify(PRESETS[b.dataset.preset])));saveH();renderSetup();renderHost();renderRoomBox();broadcastLobby();}));
+document.querySelectorAll("[data-preset]").forEach(b=>b.addEventListener("click",()=>{Object.assign(H,JSON.parse(JSON.stringify(PRESETS[b.dataset.preset])));saveH();renderSetup();renderHost();renderRoomBox();publishSoon();}));
 
 /* ---- dealing ---- */
 function showErr(t){$("err").innerHTML=t;$("err").hidden=!t;}
-function deal(){
+async function deal(){
   const ps=H.players;
   if(!ps.length)return showErr("Nobody has joined yet.");
   const ts=teamList();
@@ -429,14 +479,16 @@ function deal(){
   const order=[...new Set(decks.map(d=>d.name||"Card"))];
   hands.forEach(h=>{h.cards.sort((a,b)=>order.indexOf(a.deck)-order.indexOf(b.deck));delete h.key;});
   if(noTeam.length)notes.unshift(`${noTeam.map(p=>esc(p.name)).join(", ")} ${noTeam.length===1?"has":"have"} no team, so team-only decks skipped them.`);
-  const wheel=wheelEntries(ps),land=rnd(ps.length);
-  H.deal={id:uid(),title:H.title.trim(),hands,unused,wheel,land};
-  H.players.forEach(p=>delete p.got);saveH();
-  showErr(notes.join("<br>"));
+  const wheel=ps.map(p=>({name:p.name,colour:teamColour(p.team,ts)})),land=rnd(ps.length);
+  H.deal={id:uid(),title:H.title.trim(),hands,unused,wheel,land,at:Date.now(),sealed:{}};
+  H.players.forEach(p=>delete p.got);
+  $("dealBtn").disabled=true;
+  for(const p of H.players)await sealFor(p);
+  $("dealBtn").disabled=false;
+  saveH();showErr(notes.join("<br>"));
   spinningHost=true;hostWheel.set(wheel);$("hostStatus").textContent="Shuffling…";
   hostWheel.spin(land,()=>{spinningHost=false;renderHost();});
-  for(const pid of conns.keys())sendDeal(pid,true);
-  renderHost();
+  publishState();renderHost();
 }
 $("dealBtn").addEventListener("click",()=>{if(H.deal){$("redealWarn").hidden=false;return;}deal();});
 $("redealYes").addEventListener("click",()=>{$("redealWarn").hidden=true;deal();});
@@ -445,78 +497,89 @@ $("redealNo").addEventListener("click",()=>{$("redealWarn").hidden=true;});
 /* =====================================================================
    PLAYER
    ===================================================================== */
-let ME=null, pPeer=null, pConn=null, pRetry=null, plWheel=null, CODE="", joined=false, myHand=null, faceUp=false, spinningPl=false, lastLobby=null;
-function startPlayer(code){
+let startHandId=null,ME=null,KEYS=null,pRelay=null,plWheel=null,CODE="",joined=false,myHand=null,faceUp=false,spinningPl=false,lastState=null,lastStateAt=0,pingT=null,findT=null,shownDeal=null;
+async function startPlayer(code){
   CODE=code;
   ME=lsGet("scdMe")||{pid:uid(),name:""};lsSet("scdMe",ME);
   $("player").hidden=false;$("plHead").textContent="Room "+code;
   $("plName").value=ME.name||"";
   plWheel=makeWheel($("plWheel"));
-  const saved=lsGet("scdHand");if(saved&&saved.room===code){myHand=saved;}
+  try{KEYS=await myKeys();}catch(e){showPlErr("This browser can't open secret cards. Try Chrome or Safari, and open the link directly rather than inside another app.");$("plJoinBtn").disabled=true;return;}
+  const saved=lsGet("scdHand");if(saved&&saved.room===code)myHand=saved;startHandId=myHand?myHand.id:null;
+  connectPlayer();
   if(ME.name&&lsGet("scdJoined")===code)join();
 }
+function connectPlayer(){
+  const base=NS+CODE;
+  setConn("off","Connecting…");
+  pRelay=relay(+(Q.get("b")||0),{
+    subscribe:base+"/down",
+    onConnect:()=>{setConn("on","Connected");if(joined||$("plJoinBtn").dataset.busy)sendHello();
+      clearTimeout(findT);findT=setTimeout(()=>{if(!lastState){showPlErr(`Can't find room ${CODE}. Check the code, and make sure the dealer's page is open on their phone.`);resetJoinBtn();}},8000);},
+    onDown:t=>setConn("off",t),
+    onMessage:(t,d)=>onPlayerState(d)
+  });
+  window.__kick=()=>{if(!pRelay.connected){pRelay.stop();connectPlayer();}};
+  clearInterval(pingT);pingT=setInterval(()=>{if(joined)pRelay.publish(NS+CODE+"/up",{t:"ping",pid:ME.pid});checkDealerAlive();},8000);
+}
+function sendHello(){pRelay.publish(NS+CODE+"/up",{t:"hello",pid:ME.pid,name:ME.name,pk:{x:KEYS.pub.x,y:KEYS.pub.y}});}
 function join(){
   const name=$("plName").value.trim().replace(/\s+/g," ");
   if(!name){showPlErr("Type your name first.");return;}
   ME.name=name;lsSet("scdMe",ME);showPlErr("");
-  $("plJoinBtn").disabled=true;$("plJoinBtn").textContent="Joining…";
-  connect();
+  $("plJoinBtn").disabled=true;$("plJoinBtn").textContent="Joining…";$("plJoinBtn").dataset.busy="1";
+  if(pRelay.connected)sendHello();
+  clearTimeout(join.t);join.t=setTimeout(()=>{if(!joined){showPlErr(lastState?"The dealer's phone isn't answering. Ask them to open the room page and keep it on screen.":`Can't reach room ${CODE}. Check your internet connection and the room code.`);resetJoinBtn();}},12000);
 }
 function showPlErr(t){$("plErr").textContent=t;$("plErr").hidden=!t;}
-function connect(){
-  clearTimeout(pRetry);
-  if(typeof Peer==="undefined"){setConn("off","Couldn't load. Check your internet.");return;}
-  setConn("off","Connecting…");
-  const go=()=>{
-    try{pConn&&pConn.close();}catch(e){}
-    pConn=pPeer.connect(hostIdFor(CODE),{reliable:true});
-    const c=pConn;
-    const timeout=setTimeout(()=>{if(!c.open&&c===pConn)retry();},9000);
-    c.on("open",()=>{clearTimeout(timeout);c.send({type:"hello",pid:ME.pid,name:ME.name});});
-    c.on("data",d=>{if(c===pConn)onPlayerData(d);});
-    c.on("close",()=>{if(c===pConn&&joined)retry();});
-    c.on("error",()=>{if(c===pConn)retry();});
-  };
-  if(pPeer&&!pPeer.destroyed&&pPeer.open){go();return;}
-  try{pPeer&&pPeer.destroy();}catch(e){}
-  pPeer=new Peer(peerOpts());
-  pPeer.on("open",go);
-  pPeer.on("error",e=>{
-    if(e.type==="peer-unavailable"){setConn("off","Dealer not reachable. Retrying…");if(!joined){showPlErr(`Can't find room ${CODE}. Check the code, and that the dealer has the page open.`);resetJoinBtn();}}
-    retry();
-  });
-  pPeer.on("disconnected",()=>{try{pPeer.reconnect();}catch(e){}});
+function resetJoinBtn(){$("plJoinBtn").disabled=false;$("plJoinBtn").textContent="Join";delete $("plJoinBtn").dataset.busy;}
+function checkDealerAlive(){
+  if(!joined||!lastState)return;
+  const quiet=Date.now()-lastStateAt>30000;
+  if(quiet&&pRelay.connected)setConn("off","Dealer offline");else if(pRelay.connected)setConn("on","Connected");
 }
-function retry(){clearTimeout(pRetry);setConn("off","Reconnecting…");pRetry=setTimeout(connect,2500);}
-function resetJoinBtn(){$("plJoinBtn").disabled=false;$("plJoinBtn").textContent="Join";}
-function onPlayerData(d){
-  if(!d||typeof d!=="object")return;
-  if(d.type==="error"){showPlErr(d.text);resetJoinBtn();joined=false;lsSet("scdJoined",null);$("plJoin").hidden=false;$("plLobby").hidden=true;clearTimeout(pRetry);try{pConn.close();}catch(e){}setConn("off","Not joined");return;}
-  if(d.type==="welcome"){joined=true;ME.name=d.name;lsSet("scdMe",ME);lsSet("scdJoined",CODE);setConn("on","Connected");
-    $("plJoin").hidden=true;$("plLobby").hidden=false;$("plTitle").textContent=d.title||"Secret Card Dealer";$("plHead").textContent=d.name;resetJoinBtn();renderPlayer();return;}
-  if(d.type==="lobby"){lastLobby=d;$("plTitle").textContent=d.title||"Secret Card Dealer";
-    $("plList").innerHTML=d.players.map(p=>`<span class="pill" style="border-color:${p.colour}"><span class="dot${p.online?" on":""}"></span>${esc(p.name)}${p.team?` · ${esc(p.team)}`:""}</span>`).join("");
-    if(!spinningPl&&!(myHand&&myHand.id))plWheel.set(d.players.map(p=>({name:p.name,colour:p.colour})));
-    renderPlayer();return;}
-  if(d.type==="spin"){
-    const isNew=!myHand||myHand.id!==d.id;
-    myHand={room:CODE,id:d.id,title:d.title,hand:d.hand,wheel:d.wheel,land:d.land};lsSet("scdHand",myHand);
-    pConn&&pConn.open&&pConn.send({type:"got",id:d.id});
-    plWheel.set(d.wheel);
-    if(isNew){faceUp=false;}
-    if(d.animate&&isNew){spinningPl=true;renderPlayer();plWheel.spin(d.land,()=>{spinningPl=false;renderPlayer();});}
-    else{plWheel.land(d.land);renderPlayer();}
-    return;}
-  if(d.type==="kicked"||d.type==="closed"){joined=false;lsSet("scdJoined",null);lsSet("scdHand",null);myHand=null;clearTimeout(pRetry);try{pConn.close();}catch(e){}
-    setConn("off",d.type==="kicked"?"Removed by dealer":"Room closed");$("plLobby").hidden=true;$("plJoin").hidden=false;
-    showPlErr(d.type==="kicked"?"The dealer removed you from the room.":"The dealer closed this room. Ask for the new code.");resetJoinBtn();}
+async function onPlayerState(d){
+  if(!d||d.t!=="state")return;
+  clearTimeout(findT);
+  if(d.closed){lastState=null;joined=false;lsSet("scdJoined",null);lsSet("scdHand",null);myHand=null;
+    $("plLobby").hidden=true;$("plJoin").hidden=false;showPlErr("This room has been closed. Ask the dealer for the new code.");resetJoinBtn();return;}
+  lastState=d;lastStateAt=Date.now();
+  const kid=kidOf(KEYS.pub);
+  $("plTitle").textContent=d.title||"Secret Card Dealer";
+  const err=d.errors&&d.errors[kid];
+  const amIn=d.players.some(p=>p.name.toLowerCase()===String(ME.name||"").toLowerCase());
+  if(err&&($("plJoinBtn").dataset.busy||joined)){
+    joined=false;lsSet("scdJoined",null);$("plLobby").hidden=true;$("plJoin").hidden=false;showPlErr(err);resetJoinBtn();clearTimeout(join.t);return;}
+  if(!joined&&$("plJoinBtn").dataset.busy&&amIn&&!err){
+    joined=true;lsSet("scdJoined",CODE);clearTimeout(join.t);resetJoinBtn();showPlErr("");
+    $("plJoin").hidden=true;$("plLobby").hidden=false;$("plHead").textContent=ME.name;
+  }
+  if(!joined)return;
+  if(!amIn){joined=false;lsSet("scdJoined",null);$("plLobby").hidden=true;$("plJoin").hidden=false;showPlErr("You're no longer in this room. Join again.");return;}
+  checkDealerAlive();
+  $("plList").innerHTML=d.players.map(p=>`<span class="pill" style="border-color:${p.colour}"><span class="dot${p.online?" on":""}"></span>${esc(p.name)}${p.team?` · ${esc(p.team)}`:""}</span>`).join("");
+  const deal=d.deal;
+  if(!deal){myHand=null;lsSet("scdHand",null);shownDeal=null;if(!spinningPl)plWheel.set(d.players.map(p=>({name:p.name,colour:p.colour})));renderPlayer();return;}
+  const box=deal.sealed&&deal.sealed[kid];
+  if(box&&(!myHand||myHand.id!==deal.id||!myHand.hand)){
+    try{const hand=await unseal(KEYS.priv,box);if(hand.id===deal.id){myHand={room:CODE,id:deal.id,title:deal.title,hand};lsSet("scdHand",myHand);faceUp=false;}}
+    catch(e){}
+  }
+  if(myHand&&myHand.id===deal.id&&myHand.hand&&onPlayerState.ack!==deal.id){onPlayerState.ack=deal.id;pRelay.publish(NS+CODE+"/up",{t:"got",pid:ME.pid,id:deal.id});}
+  if(shownDeal!==deal.id){
+    const fresh=shownDeal!==null||(Date.now()-(deal.at||0)<8000&&startHandId!==deal.id);
+    shownDeal=deal.id;plWheel.set(deal.wheel);
+    if(fresh&&!matchMedia("(prefers-reduced-motion: reduce)").matches){spinningPl=true;renderPlayer();plWheel.spin(deal.land,()=>{spinningPl=false;renderPlayer();});return;}
+    plWheel.land(deal.land);
+  }
+  renderPlayer();
 }
 function renderPlayer(){
-  const card=$("plCard");
+  const card=$("plCard"),deal=lastState&&lastState.deal;
   if(spinningPl){card.disabled=true;card.classList.remove("up");$("plBack").textContent="Shuffling";$("plStatus").textContent="Shuffling…";$("plNote").textContent="";return;}
-  if(!myHand||!myHand.id){card.disabled=true;card.classList.remove("up");$("plBack").textContent="Waiting";$("plStatus").textContent="Waiting for the dealer";$("plNote").textContent="Keep this page open. Your card appears here when the dealer deals.";return;}
+  if(!deal){card.disabled=true;card.classList.remove("up");$("plBack").textContent="Waiting";$("plStatus").textContent="Waiting for the dealer";$("plNote").textContent="Keep this page open. Your card appears here when the dealer deals.";return;}
   $("plStatus").textContent="Cards dealt";
-  if(!myHand.hand){card.disabled=true;$("plBack").textContent="Next deal";$("plNote").textContent="You joined after this deal. You'll get cards next time the dealer deals.";return;}
+  if(!myHand||myHand.id!==deal.id){card.disabled=true;card.classList.remove("up");$("plBack").textContent="On its way";$("plNote").textContent="If you joined after the deal, you'll get cards next time the dealer deals.";return;}
   card.disabled=false;$("plBack").textContent="Tap to reveal";
   $("plFront").style.setProperty("--c",myHand.hand.colour||"var(--gn)");
   $("plFront").innerHTML=frontHTML(myHand.hand,myHand.title);
@@ -526,15 +589,15 @@ function renderPlayer(){
 $("plCard").addEventListener("click",()=>{if(!myHand||!myHand.hand||spinningPl)return;faceUp=!faceUp;renderPlayer();});
 $("plJoinBtn").addEventListener("click",join);
 $("plName").addEventListener("keydown",e=>{if(e.key==="Enter")join();});
-$("plLeave").addEventListener("click",()=>{try{pConn&&pConn.open&&pConn.send({type:"leave"});}catch(e){}joined=false;lsSet("scdJoined",null);lsSet("scdHand",null);myHand=null;clearTimeout(pRetry);
-  setTimeout(()=>{try{pConn.close();}catch(e){}},300);$("plLobby").hidden=true;$("plJoin").hidden=false;setConn("off","Not joined");$("plName").focus();});
+$("plLeave").addEventListener("click",()=>{pRelay.publish(NS+CODE+"/up",{t:"leave",pid:ME.pid});joined=false;lsSet("scdJoined",null);lsSet("scdHand",null);myHand=null;
+  $("plLobby").hidden=true;$("plJoin").hidden=false;$("plName").focus();});
 
 /* ================= boot ================= */
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",()=>{hostWheel&&hostWheel.redraw();plWheel&&plWheel.redraw();});
 (function boot(){
   const code=(Q.get("room")||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
   if(code){startPlayer(code);return;}
-  if(lsGet("scdHost")&&lsGet("scdIsHost")){startHost();return;}
+  if(lsGet("scdIsHost")&&lsGet("scdHost")){startHost();return;}
   $("landing").hidden=false;
   const go=()=>{const c=$("joinCode").value.toUpperCase().replace(/[^A-Z0-9]/g,"");if(!c){$("joinCode").focus();return;}location.href=joinUrl(c);};
   $("joinGo").addEventListener("click",go);$("joinCode").addEventListener("keydown",e=>{if(e.key==="Enter")go();});
