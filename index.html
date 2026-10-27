@@ -46,6 +46,15 @@ input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-vis
 .btn.wa{background:#1f9d55;border-color:#1f9d55;color:#fff}
 .btn.ghost{background:transparent}
 .btn:disabled{opacity:.45;cursor:not-allowed}
+.legend{background:var(--surface);border:1px dashed var(--line);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--muted);display:grid;grid-template-columns:auto 1fr;gap:4px 12px}
+.legend code{font-family:var(--mono);color:var(--fg);white-space:nowrap}
+@media (max-width:520px){.legend{grid-template-columns:1fr;gap:0}.legend code{margin-top:8px}.legend code:first-child{margin-top:0}}
+.count{font-size:13px;color:var(--muted)}
+.count.ok{color:var(--ok)}
+.count.bad{color:var(--fg);background:var(--warn-soft);border-radius:6px;padding:4px 8px}
+.presets{display:flex;gap:8px;flex-wrap:wrap}
+.howto{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;white-space:pre-wrap;font-size:14px}
+.front .line small{display:block;font-size:13px;opacity:.88;margin-top:3px;line-height:1.3}
 .deck{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px}
 .deck-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:10px}
 @media (max-width:460px){.deck-grid{grid-template-columns:1fr}}
@@ -124,6 +133,7 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
     <div class="wheelbox"><div class="pointer" aria-hidden="true"></div><canvas id="plWheel" width="600" height="600" role="img" aria-label="Wheel with everyone's name"></canvas><div class="status" id="plStatus" aria-live="polite"></div></div>
     <div class="cardwrap"><button class="card" id="plCard" type="button" disabled aria-label="Your card. Tap to reveal or hide."><div class="face back"><span id="plBack">Waiting</span></div><div class="face front" id="plFront"></div></button></div>
     <p class="note" id="plNote" style="text-align:center"></p>
+    <details id="plHowBox" hidden><summary>How to play</summary><div class="howto" id="plHow" style="margin-top:10px"></div></details>
     <div class="step"><h2>In the room</h2><div class="row" id="plList"></div></div>
     <div class="row"><button class="btn small ghost" type="button" id="plLeave">Change name</button></div>
   </section>
@@ -161,14 +171,27 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
   <details open id="setupBox">
     <summary>Game setup: teams and decks</summary>
     <div class="step" style="margin-top:12px">
-      <div class="row"><span class="note">Start from:</span>
-        <button class="btn small" type="button" data-preset="boom">Two Rooms: Team Battle</button>
-        <button class="btn small" type="button" data-preset="blank">Blank</button></div>
+      <div class="step" style="gap:6px"><span class="note">Start from a ready-made game:</span><div class="presets" id="presetBtns"></div></div>
       <label class="f">Game name<input type="text" id="title"></label>
       <label class="f">Teams, separated by commas (leave empty for none)<input type="text" id="teams" placeholder="e.g. Red, Blue"></label>
-      <p class="note">Each deck is shuffled and every eligible player gets one card from it. One card per line. Put * before a card to mark it as a key card; another deck can then skip whoever holds one.</p>
+      <label class="f">How to play (players see this on their phones)<textarea id="note" style="min-height:80px;font-family:var(--body)" placeholder="A few lines of rules everyone should remember"></textarea></label>
+      <h2 style="font-size:20px">Decks</h2>
+      <div class="legend" aria-label="How to write cards">
+        <code>Villager</code><span>One card per line</span>
+        <code>3x Villager</code><span>Three copies of a card</span>
+        <code>+Villager</code><span>Fills up: everyone left over gets this card</span>
+        <code>Seer | Checks one player</code><span>Text after | explains the card on the player's phone</span>
+        <code>@Werewolf</code><span>Players with this card see each other's names</span>
+        <code>*Spy</code><span>Key card: decks set to “skip key cards” pass this player over</span>
+      </div>
       <div class="list" id="decks"></div>
       <div class="row"><button class="btn small" type="button" id="addDeck">Add a deck</button></div>
+      <div class="step" style="gap:8px">
+        <h2 style="font-size:20px">Save and share this game</h2>
+        <p class="note">Copy a link that opens this page with your whole setup loaded, so you can keep it, use it on another device, or send it to another host.</p>
+        <div class="row"><button class="btn small" type="button" id="copySetup">Copy setup link</button><button class="btn small" type="button" id="saveMine">Save to my games</button></div>
+        <div class="presets" id="mineBtns"></div>
+      </div>
     </div>
   </details>
 
@@ -290,21 +313,45 @@ function makeWheel(canvas){
   };
 }
 function frontHTML(h,title){
+  const lines=h.cards.map(c=>`<div class="line"><b>${esc(c.deck)}</b>${esc(c.text)}${c.desc?`<small>${esc(c.desc)}</small>`:""}</div>`);
+  (h.sees||[]).forEach(s=>lines.push(`<div class="line"><b>Also ${esc(s.card)}</b>${s.names.length?s.names.map(esc).join(", "):"Nobody else"}</div>`));
   return `<div class="k">${esc(title||"Your cards")}</div><div class="nm">${esc(h.name)}</div>${h.team?`<div class="k">Team ${esc(h.team)}</div>`:""}
-  ${h.cards.length?h.cards.map(c=>`<div class="line"><b>${esc(c.deck)}</b>${esc(c.text)}</div>`).join(""):`<div class="line">No cards this deal.</div>`}<div class="hint">Tap to hide</div>`;
+  ${lines.length?lines.join(""):`<div class="line">No cards this deal.</div>`}<div class="hint">Tap to hide</div>`;
 }
 
 /* ================= presets ================= */
 const MISSIONS=["Be sent as a hostage at least once","Never be sent as a hostage","End the game in a room with more opponents than teammates","Get an opponent to show you their card, by Show or Interrogation","Get the other team to Interrogate you","End the game in the same room as your own key player","Be the leader who uses your team's Interrogation","Show your card to an opponent at least once"];
 const PRESETS={
-  boom:{title:"Two Rooms and a Boom: Team Battle",teams:"Red, Blue",decks:[
-    {name:"Role",to:"Red",skip:false,cards:"*The Bomber\nRed plain\nRed plain\nRed plain"},
-    {name:"Role",to:"Blue",skip:false,cards:"*The President\nBlue plain\nBlue plain\nBlue plain"},
-    {name:"Start in",to:"Red",skip:false,cards:"Room A\nRoom A\nRoom B\nRoom B"},
-    {name:"Start in",to:"Blue",skip:false,cards:"Room A\nRoom A\nRoom B\nRoom B"},
-    {name:"Secret mission",to:"",skip:true,cards:MISSIONS.join("\n")}]},
-  blank:{title:"",teams:"",decks:[{name:"Card",to:"",skip:false,cards:""}]}
+  boom:{label:"Two Rooms: Team Battle",title:"Two Rooms and a Boom: Team Battle",teams:"Red, Blue",
+    note:"Red wins if the Bomber and President end in the same room. Blue wins if they don't.\nRounds: 3, 2 and 1 minutes. One hostage per room per round.\nShow: +1 point each, max 2 per team per game. Missions: +1 each. Win: +8.",
+    decks:[
+    {name:"Role",to:"Red",mode:"each",skip:false,cards:"*The Bomber | Red wins if you end in the President's room. You may Pull after the last swap, only if Red never Interrogates.\n3x Red plain"},
+    {name:"Role",to:"Blue",mode:"each",skip:false,cards:"*The President | Blue wins if you end in a different room from the Bomber.\n3x Blue plain"},
+    {name:"Start in",to:"*each",mode:"each",skip:false,cards:"2x Room A\n2x Room B"},
+    {name:"Secret mission",to:"",mode:"each",skip:true,cards:MISSIONS.map(m=>m+" | Secret, even from your teammates. Worth 1 point.").join("\n")}]},
+  werewolf:{label:"Werewolf / Mafia",title:"Werewolf",teams:"",
+    note:"Night: everyone closes their eyes. Werewolves wake and pick a victim, then the Seer and Doctor take their turns.\nDay: discuss and vote someone out.\nVillagers win when every werewolf is out. Werewolves win when they equal the villagers.",
+    decks:[{name:"Role",to:"",mode:"each",skip:false,cards:"@2x Werewolf | Each night, choose a victim with the other werewolves.\nSeer | Each night, ask the moderator whether one player is a werewolf.\nDoctor | Each night, protect one player from the werewolves.\n+Villager | Find the werewolves and vote them out."}]},
+  spy:{label:"Spy among us",title:"Spy among us",teams:"",
+    note:"Everyone except the spy knows the location. Take turns asking each other questions about it.\nThe spy wins by guessing the location. Everyone else wins by voting out the spy.",
+    decks:[{name:"Role",to:"",mode:"each",skip:false,cards:"*Spy | Work out the location from everyone's questions without giving yourself away.\n+Not the spy | Find the spy without making the location too obvious."},
+      {name:"Location",to:"",mode:"same",skip:true,cards:"Beach\nHospital\nSchool\nSpace station\nCasino\nSubmarine\nRestaurant\nAirplane\nFilm studio\nPolar base\nCircus\nBank"}]},
+  blank:{label:"Blank",title:"",teams:"",note:"",decks:[{name:"Card",to:"",mode:"each",skip:false,cards:""}]}
 };
+const SETUP_KEYS=["title","teams","note","decks"];
+const setupOf=src=>JSON.parse(JSON.stringify(SETUP_KEYS.reduce((o,k)=>(o[k]=src[k]??(k==="decks"?[]:""),o),{})));
+
+/* Card syntax: "3x Name", "+Name" fills the rest, "Name | explanation", "@Name" holders see each other, "*Name" key card */
+function parseCards(text){
+  return String(text||"").split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{
+    let key=false,fill=false,see=false;
+    for(;;){const ch=l[0];if(ch==="*")key=true;else if(ch==="+")fill=true;else if(ch==="@")see=true;else break;l=l.slice(1).trim();}
+    let count=1;const m=/^(\d{1,2})\s*[x×]\s*(.+)$/i.exec(l);if(m){count=Math.max(1,+m[1]);l=m[2];}
+    const bar=l.indexOf("|"),name=(bar<0?l:l.slice(0,bar)).trim(),desc=bar<0?"":l.slice(bar+1).trim();
+    return {name,desc,key,fill,see,count:fill?0:count};
+  }).filter(c=>c.name);
+}
+const pileOf=cards=>cards.flatMap(c=>Array(c.count).fill(c));
 
 /* =====================================================================
    HOST: keeps the room's state and publishes it (retained) to …/down.
@@ -320,7 +367,11 @@ const online=p=>Date.now()-(p.seen||0)<ONLINE_MS;
 function startHost(){
   isHostPage=true;
   H=lsGet("scdHost");
-  if(!H||!H.code||H.v!==2){H={v:2,code:newCode(),...JSON.parse(JSON.stringify(PRESETS.boom)),players:[],deal:null,errors:{}};saveH();}
+  if(!H||!H.code||H.v!==2){H={v:2,code:newCode(),...setupOf(PRESETS.boom),players:[],deal:null,errors:{}};saveH();}
+  H.note=H.note||"";H.decks.forEach(d=>{d.mode=d.mode||"each";});
+  const incoming=Q.get("setup");
+  if(incoming){try{const s=JSON.parse(new TextDecoder().decode(unb64(incoming.replace(/-/g,"+").replace(/_/g,"/"))));if(Array.isArray(s.decks)){Object.assign(H,setupOf(s));saveH();setTimeout(()=>toast(`Loaded “${H.title||"game"}”`),300);}}catch(e){setTimeout(()=>toast("That setup link is incomplete."),300);}}
+  if(location.search.includes("setup="))history.replaceState(null,"",location.pathname);
   if(location.search.includes("room="))history.replaceState(null,"",location.pathname);
   $("host").hidden=false;
   hostWheel=makeWheel($("hostWheel"));
@@ -345,8 +396,8 @@ function openHostRelay(){
 function publishState(){
   if(!H||!hRelay)return;
   const ts=teamList();
-  const state={t:"state",at:Date.now(),title:H.title,closed:false,
-    players:H.players.map(p=>({name:p.name,team:p.team||"",online:online(p),colour:teamColour(p.team,ts)})),
+  const state={t:"state",at:Date.now(),title:H.title,note:H.note||"",closed:false,
+    players:H.players.map(p=>{const t=ts.includes(p.team)?p.team:"";return {name:p.name,team:t,online:online(p),colour:teamColour(t,ts)};}),
     errors:H.errors||{},
     deal:H.deal?{id:H.deal.id,title:H.deal.title,land:H.deal.land,wheel:H.deal.wheel,at:H.deal.at,sealed:H.deal.sealed||{},late:H.deal.late||[]}:null};
   hRelay.publish(NS+H.code+"/down",state,{retain:true});
@@ -382,7 +433,7 @@ async function sealFor(p){
   if(d.kids[p.pid]){delete d.sealed[d.kids[p.pid]];delete d.kids[p.pid];}
   const hand=d.hands.find(h=>h.pid===p.pid);if(!hand)return;
   const kid=kidOf(p.pk);
-  d.sealed[kid]=await seal(p.pk,{name:hand.name,team:hand.team,cards:hand.cards,colour:hand.colour,id:d.id});
+  d.sealed[kid]=await seal(p.pk,{name:hand.name,team:hand.team,cards:hand.cards,sees:hand.sees||[],colour:hand.colour,id:d.id});
   d.kids[p.pid]=kid;saveH();
 }
 
@@ -411,13 +462,14 @@ function renderHost(){
     if(H.deal){hostWheel.set(H.deal.wheel);hostWheel.land(H.deal.land);$("hostStatus").textContent="Cards dealt";}
     else{hostWheel.set(H.players.map(p=>({name:p.name,colour:teamColour(p.team,ts)})));$("hostStatus").textContent=H.players.length?"Ready when you are":"Waiting for players";}
   }
-  renderKey();
+  renderKey();renderCounts();
 }
 function renderKey(){
   const d=H.deal;$("keyBox").hidden=!d;if(!d)return;
   const rows=d.hands.map(h=>`<tr><td>${esc(h.name)}${h.team?` <span class="note">(${esc(h.team)})</span>`:""}</td><td>${h.cards.map(c=>`<b>${esc(c.deck)}:</b> ${esc(c.text)}`).join("<br>")||"—"}</td></tr>`).join("");
+  const sum=Object.entries(d.hands.flatMap(h=>h.cards.map(c=>c.deck+": "+c.text)).reduce((m,k)=>(m[k]=(m[k]||0)+1,m),{})).map(([k,n])=>`${esc(k)}${n>1?" ×"+n:""}`).join(" · ");
   const un=d.unused.length?`<tr><td><span class="note">Not dealt</span></td><td>${d.unused.map(c=>`${esc(c.deck)}: ${esc(c.text)}`).join("<br>")}</td></tr>`:"";
-  $("key").innerHTML=`<thead><tr><th>Player</th><th>Cards</th></tr></thead><tbody>${rows}${un}</tbody>`;
+  $("key").innerHTML=`<thead><tr><th>Player</th><th>Cards</th></tr></thead><tbody>${rows}${un}<tr><td><span class="note">In play</span></td><td class="note">${sum}</td></tr></tbody>`;
 }
 $("hostList").addEventListener("change",e=>{const s=e.target.closest("[data-team]");if(!s)return;H.players[+s.dataset.team].team=s.value;saveH();renderHost();publishSoon();});
 $("hostList").addEventListener("click",async e=>{const b=e.target.closest("[data-kick]");if(!b)return;const p=H.players[+b.dataset.kick];
@@ -436,56 +488,141 @@ $("newRoom").addEventListener("click",()=>{
 });
 
 /* ---- setup editor ---- */
-function renderSetup(){$("title").value=H.title;$("teams").value=H.teams;renderDecks();}
+function renderSetup(){$("title").value=H.title;$("teams").value=H.teams;$("note").value=H.note||"";renderDecks();renderPresetBtns();}
+function renderPresetBtns(){
+  $("presetBtns").innerHTML=Object.entries(PRESETS).map(([k,p])=>`<button class="btn small" type="button" data-preset="${k}">${esc(p.label)}</button>`).join("");
+  const mine=lsGet("scdMine")||[];
+  $("mineBtns").innerHTML=mine.length?`<span class="note" style="width:100%">My games:</span>`+mine.map((g,i)=>`<span class="row" style="gap:2px"><button class="btn small" type="button" data-mine="${i}">${esc(g.title||"Untitled game")}</button><button class="btn small ghost" type="button" data-unmine="${i}" aria-label="Delete ${esc(g.title||"game")}">✕</button></span>`).join(""):"";
+}
+/* Estimated players each deck reaches, so the count check can warn before dealing */
+function deckReach(d,ps){
+  const ts=teamList();
+  const inScope=(p,to)=>!to||to==="*each"||p.team===to;
+  let n=ps.filter(p=>inScope(p,d.to)).length;
+  if(d.skip){
+    let keys=0;
+    H.decks.filter(e=>!e.skip&&e!==d).forEach(e=>{const kc=parseCards(e.cards).filter(c=>c.key);if(!kc.length)return;
+      const reach=ps.filter(p=>inScope(p,e.to)&&inScope(p,d.to)).length;
+      const mult=e.to==="*each"?Math.max(1,ts.length):1;
+      keys+=Math.min(reach,(e.mode==="same"?1:kc.reduce((s,c)=>s+(c.fill?reach:c.count),0))*mult);});
+    n=Math.max(0,n-keys);
+  }
+  return n;
+}
+function countLine(d){
+  const cards=parseCards(d.cards),fixed=cards.reduce((s,c)=>s+c.count,0),fill=cards.some(c=>c.fill);
+  if(!cards.length)return {cls:"",text:"No cards yet."};
+  if(d.mode==="same")return {cls:"ok",text:`One of ${cards.filter(c=>!c.fill).length} cards is picked at random and everyone in this deck gets the same one.`};
+  const ps=H.players;
+  if(d.to==="*each"){const ts=teamList();if(!ts.length)return {cls:"bad",text:"Add teams above to deal this deck to each team."};
+    const per=ts.map(t=>({t,n:ps.filter(p=>p.team===t).length}));
+    if(!ps.length)return {cls:"",text:`${fixed} cards${fill?" plus fill":""}, dealt separately to each team.`};
+    const short=per.filter(x=>!fill&&x.n>fixed);
+    return short.length?{cls:"bad",text:`${fixed} cards, but ${short.map(x=>`${esc(x.t)} has ${x.n} players`).join(" and ")}. Add cards or a + card.`}
+      :{cls:"ok",text:`✓ ${fixed} cards${fill?" plus fill":""} for each team.`};}
+  if(!ps.length)return {cls:"",text:`${fixed} card${fixed===1?"":"s"}${fill?", plus a fill card for everyone else":""}.`};
+  const n=deckReach(d,ps);
+  if(fixed>=n||fill)return {cls:"ok",text:`✓ ${fixed} card${fixed===1?"":"s"}${fill?" plus fill":""} for ${n} player${n===1?"":"s"}${fixed>n?` (${fixed-n} left over)`:""}.`};
+  return {cls:"bad",text:`${fixed} cards for ${n} players: ${n-fixed} would get nothing. Add cards or a + card.`};
+}
+function renderCounts(){H.decks.forEach((d,i)=>{const el=$("cc"+i);if(!el)return;const c=countLine(d);el.className="count "+c.cls;el.innerHTML=c.text;});}
 function renderDecks(){
   const ts=teamList();
   $("decks").innerHTML=H.decks.map((d,i)=>`<div class="deck">
     <div class="deck-grid">
       <label class="f">Deck name<input type="text" id="dn${i}" data-k="name" data-i="${i}" value="${esc(d.name)}" placeholder="e.g. Role"></label>
-      <label class="f">Deal to<select id="dt${i}" data-k="to" data-i="${i}"><option value="">Everyone</option>${[...new Set([...ts,d.to].filter(Boolean))].map(t=>`<option value="${esc(t)}"${t===d.to?" selected":""}>Team ${esc(t)} only</option>`).join("")}</select></label>
+      <label class="f">Deal to<select id="dt${i}" data-k="to" data-i="${i}"><option value="">Everyone</option>${ts.length>1?`<option value="*each"${d.to==="*each"?" selected":""}>Each team separately</option>`:""}${[...new Set([...ts,d.to].filter(t=>t&&t!=="*each"))].map(t=>`<option value="${esc(t)}"${t===d.to?" selected":""}>Team ${esc(t)} only</option>`).join("")}</select></label>
     </div>
-    <label class="f">Cards, one per line<textarea id="dc${i}" data-k="cards" data-i="${i}" spellcheck="false" placeholder="One card per line">${esc(d.cards)}</textarea></label>
-    <div class="row" style="justify-content:space-between">
-      <label class="check"><input type="checkbox" id="ds${i}" data-k="skip" data-i="${i}"${d.skip?" checked":""}> Skip players holding a * key card</label>
-      <button class="btn small ghost" type="button" data-del="${i}">Remove deck</button></div></div>`).join("");
+    <label class="f">Cards, one per line<textarea id="dc${i}" data-k="cards" data-i="${i}" spellcheck="false" placeholder="e.g.&#10;2x Werewolf&#10;Seer | Check one player each night&#10;+Villager">${esc(d.cards)}</textarea></label>
+    <p class="count" id="cc${i}"></p>
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div class="step" style="gap:6px">
+        <label class="check"><input type="checkbox" id="dm${i}" data-k="mode" data-i="${i}"${d.mode==="same"?" checked":""}> Everyone gets the same random card</label>
+        <label class="check"><input type="checkbox" id="ds${i}" data-k="skip" data-i="${i}"${d.skip?" checked":""}> Skip players holding a * key card</label>
+      </div>
+      <div class="row" style="gap:4px">
+        <button class="btn small ghost" type="button" data-up="${i}" aria-label="Move deck up"${i===0?" disabled":""}>↑</button>
+        <button class="btn small ghost" type="button" data-dup="${i}">Duplicate</button>
+        <button class="btn small ghost" type="button" data-del="${i}">Remove</button></div>
+    </div></div>`).join("");
+  renderCounts();
 }
 $("title").addEventListener("input",e=>{H.title=e.target.value;saveH();});
 $("title").addEventListener("change",()=>{renderRoomBox();publishSoon();});
 $("teams").addEventListener("input",e=>{H.teams=e.target.value;saveH();});
 $("teams").addEventListener("change",()=>{renderDecks();renderHost();publishSoon();});
-const deckEdit=e=>{const t=e.target,i=t.dataset.i,k=t.dataset.k;if(i==null||!k)return;H.decks[+i][k]=t.type==="checkbox"?t.checked:t.value;saveH();};
+$("note").addEventListener("input",e=>{H.note=e.target.value;saveH();});
+$("note").addEventListener("change",publishSoon);
+const deckEdit=e=>{const t=e.target,i=t.dataset.i,k=t.dataset.k;if(i==null||!k)return;
+  H.decks[+i][k]=t.type==="checkbox"?(k==="mode"?(t.checked?"same":"each"):t.checked):t.value;saveH();renderCounts();};
 $("decks").addEventListener("input",deckEdit);$("decks").addEventListener("change",deckEdit);
-$("decks").addEventListener("click",e=>{const b=e.target.closest("[data-del]");if(!b)return;H.decks.splice(+b.dataset.del,1);saveH();renderDecks();});
-$("addDeck").addEventListener("click",()=>{H.decks.push({name:"",to:"",skip:false,cards:""});saveH();renderDecks();$("dn"+(H.decks.length-1)).focus();});
-document.querySelectorAll("[data-preset]").forEach(b=>b.addEventListener("click",()=>{Object.assign(H,JSON.parse(JSON.stringify(PRESETS[b.dataset.preset])));saveH();renderSetup();renderHost();renderRoomBox();publishSoon();}));
+$("decks").addEventListener("click",e=>{
+  const del=e.target.closest("[data-del]"),dup=e.target.closest("[data-dup]"),up=e.target.closest("[data-up]");
+  if(del)H.decks.splice(+del.dataset.del,1);
+  else if(dup){const i=+dup.dataset.dup;H.decks.splice(i+1,0,JSON.parse(JSON.stringify(H.decks[i])));}
+  else if(up){const i=+up.dataset.up;if(i>0)[H.decks[i-1],H.decks[i]]=[H.decks[i],H.decks[i-1]];}
+  else return;
+  saveH();renderDecks();});
+$("addDeck").addEventListener("click",()=>{H.decks.push({name:"",to:"",mode:"each",skip:false,cards:""});saveH();renderDecks();$("dn"+(H.decks.length-1)).focus();});
+function loadSetup(s){Object.assign(H,setupOf(s));saveH();renderSetup();renderHost();renderRoomBox();publishSoon();}
+$("presetBtns").addEventListener("click",e=>{const b=e.target.closest("[data-preset]");if(!b)return;loadSetup(PRESETS[b.dataset.preset]);toast(`Loaded “${PRESETS[b.dataset.preset].label}”`);});
+$("mineBtns").addEventListener("click",e=>{
+  const m=e.target.closest("[data-mine]"),u=e.target.closest("[data-unmine]"),mine=lsGet("scdMine")||[];
+  if(m){loadSetup(mine[+m.dataset.mine]);toast(`Loaded “${mine[+m.dataset.mine].title||"game"}”`);}
+  if(u){const g=mine.splice(+u.dataset.unmine,1)[0];lsSet("scdMine",mine);renderPresetBtns();toast(`Deleted “${g.title||"game"}”`);}
+});
+$("saveMine").addEventListener("click",()=>{const mine=lsGet("scdMine")||[],s=setupOf(H),i=mine.findIndex(g=>g.title===s.title);
+  if(i>=0)mine[i]=s;else mine.push(s);lsSet("scdMine",mine);renderPresetBtns();toast(i>=0?`Updated “${s.title||"game"}”`:`Saved “${s.title||"game"}”`);});
+$("copySetup").addEventListener("click",()=>{
+  const raw=b64(new TextEncoder().encode(JSON.stringify(setupOf(H)))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  const u=new URL(location.href);u.search="";u.hash="";u.searchParams.set("setup",raw);const url=u.toString();
+  try{navigator.clipboard.writeText(url).then(()=>toast("Setup link copied"),()=>prompt("Copy this setup link:",url));}catch(e){prompt("Copy this setup link:",url);}
+});
 
 /* ---- dealing ---- */
 function showErr(t){$("err").innerHTML=t;$("err").hidden=!t;}
+function dealHands(ps){
+  const ts=teamList(),notes=[],unused=[];
+  const tm=p=>ts.includes(p.team)?p.team:"";
+  const hands=ps.map(p=>({pid:p.pid,name:p.name,team:tm(p),colour:teamColour(tm(p),ts),cards:[],key:false}));
+  const decks=H.decks.map((d,idx)=>({...d,idx,cards:parseCards(d.cards)})).filter(d=>d.cards.length);
+  if(!decks.length)return {error:"Add at least one deck with cards in it (Game setup, below)."};
+  const seeGroups={};
+  const give=(h,c,label)=>{h.cards.push({deck:label,text:c.name,desc:c.desc});if(c.key)h.key=true;
+    if(c.see){const g=label+"\u0000"+c.name;(seeGroups[g]=seeGroups[g]||{card:c.name,names:[]}).names.push(h);}};
+  const dealTo=(d,elig,scope)=>{
+    const label=d.name||"Card";
+    if(!elig.length)return;
+    if(d.mode==="same"){const pool=d.cards.filter(c=>!c.fill);const c=pool[rnd(pool.length)];elig.forEach(h=>give(h,c,label));
+      pool.filter(x=>x!==c).forEach(x=>unused.push({deck:label,text:x.name}));return;}
+    const pile=shuffle(pileOf(d.cards)),fill=d.cards.find(c=>c.fill);
+    shuffle(elig).forEach((h,i)=>{if(i<pile.length)give(h,pile[i],label);else if(fill)give(h,fill,label);});
+    if(pile.length<elig.length&&!fill)notes.push(`“${esc(label)}”${scope?" for "+esc(scope):""} has ${pile.length} cards for ${elig.length} players, so ${elig.length-pile.length} got none.`);
+    pile.slice(elig.length).forEach(c=>unused.push({deck:label,text:c.name}));
+  };
+  [...decks.filter(d=>!d.skip),...decks.filter(d=>d.skip)].forEach(d=>{
+    const ok=h=>!(d.skip&&h.key);
+    if(d.to==="*each"){(ts.length?ts:[""]).forEach(t=>dealTo(d,hands.filter(h=>h.team===t&&ok(h)),t));}
+    else dealTo(d,hands.filter(h=>(!d.to||h.team===d.to)&&ok(h)),d.to);
+  });
+  const order=decks.map(d=>d.name||"Card");
+  hands.forEach(h=>{h.cards.sort((a,b)=>order.indexOf(a.deck)-order.indexOf(b.deck));delete h.key;h.sees=[];});
+  Object.values(seeGroups).forEach(g=>g.names.forEach(h=>h.sees.push({card:g.card,names:g.names.filter(x=>x!==h).map(x=>x.name)})));
+  const noTeam=ts.length&&H.decks.some(d=>d.to)?ps.filter(p=>!tm(p)):[];
+  if(noTeam.length)notes.unshift(`${noTeam.map(p=>esc(p.name)).join(", ")} ${noTeam.length===1?"has":"have"} no team, so team-only decks skipped them.`);
+  return {hands,unused,notes};
+}
 async function deal(){
   const ps=H.players;
   if(!ps.length)return showErr("Nobody has joined yet.");
-  const ts=teamList();
-  const decks=H.decks.map(d=>({...d,list:d.cards.split("\n").map(c=>c.trim()).filter(Boolean)})).filter(d=>d.list.length);
-  if(!decks.length)return showErr("Add at least one deck with cards in it (Game setup, below).");
-  const noTeam=ts.length?ps.filter(p=>!p.team):[];
-  const hands=ps.map(p=>({pid:p.pid,name:p.name,team:p.team||"",colour:teamColour(p.team,ts),cards:[],key:false}));
-  const notes=[],unused=[];
-  [...decks.filter(d=>!d.skip),...decks.filter(d=>d.skip)].forEach(d=>{
-    const elig=hands.filter(h=>(!d.to||h.team===d.to)&&!(d.skip&&h.key)),pile=shuffle(d.list),label=d.name||"Card";
-    if(pile.length<elig.length)notes.push(`“${esc(label)}”${d.to?" for "+esc(d.to):""} has ${pile.length} cards for ${elig.length} players, so ${elig.length-pile.length} got none.`);
-    shuffle(elig).forEach((h,i)=>{if(i<pile.length){const raw=pile[i],star=raw.startsWith("*");h.cards.push({deck:label,text:star?raw.slice(1).trim():raw});if(star)h.key=true;}});
-    pile.slice(elig.length).forEach(c=>unused.push({deck:label,text:c.replace(/^\*/,"").trim()}));
-  });
-  const order=[...new Set(decks.map(d=>d.name||"Card"))];
-  hands.forEach(h=>{h.cards.sort((a,b)=>order.indexOf(a.deck)-order.indexOf(b.deck));delete h.key;});
-  if(noTeam.length)notes.unshift(`${noTeam.map(p=>esc(p.name)).join(", ")} ${noTeam.length===1?"has":"have"} no team, so team-only decks skipped them.`);
-  const wheel=ps.map(p=>({name:p.name,colour:teamColour(p.team,ts)})),land=rnd(ps.length);
-  H.deal={id:uid(),title:H.title.trim(),hands,unused,wheel,land,at:Date.now(),sealed:{}};
+  const r=dealHands(ps);if(r.error)return showErr(r.error);
+  const ts=teamList(),wheel=ps.map(p=>({name:p.name,colour:teamColour(ts.includes(p.team)?p.team:"",ts)})),land=rnd(ps.length);
+  H.deal={id:uid(),title:H.title.trim(),hands:r.hands,unused:r.unused,wheel,land,at:Date.now(),sealed:{}};
   H.players.forEach(p=>delete p.got);
   $("dealBtn").disabled=true;
   for(const p of H.players)await sealFor(p);
   $("dealBtn").disabled=false;
-  saveH();showErr(notes.join("<br>"));
+  saveH();showErr(r.notes.join("<br>"));
   spinningHost=true;hostWheel.set(wheel);$("hostStatus").textContent="Shuffling…";
   hostWheel.spin(land,()=>{spinningHost=false;renderHost();});
   publishState();renderHost();
@@ -557,6 +694,7 @@ async function onPlayerState(d){
   if(!joined)return;
   if(!amIn){joined=false;lsSet("scdJoined",null);$("plLobby").hidden=true;$("plJoin").hidden=false;showPlErr("You're no longer in this room. Join again.");return;}
   checkDealerAlive();
+  $("plHowBox").hidden=!d.note;$("plHow").textContent=d.note||"";
   $("plList").innerHTML=d.players.map(p=>`<span class="pill" style="border-color:${p.colour}"><span class="dot${p.online?" on":""}"></span>${esc(p.name)}${p.team?` · ${esc(p.team)}`:""}</span>`).join("");
   const deal=d.deal;
   if(!deal){myHand=null;lsSet("scdHand",null);shownDeal=null;if(!spinningPl)plWheel.set(d.players.map(p=>({name:p.name,colour:p.colour})));renderPlayer();return;}
@@ -597,6 +735,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",()=>{host
 (function boot(){
   const code=(Q.get("room")||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
   if(code){startPlayer(code);return;}
+  if(Q.get("setup")){lsSet("scdIsHost",true);startHost();return;}
   if(lsGet("scdIsHost")&&lsGet("scdHost")){startHost();return;}
   $("landing").hidden=false;
   const go=()=>{const c=$("joinCode").value.toUpperCase().replace(/[^A-Z0-9]/g,"");if(!c){$("joinCode").focus();return;}location.href=joinUrl(c);};
